@@ -12,9 +12,10 @@ XML_ONLY = 0
 ifeq ($(XML_ONLY),0)
     # Try XLSX first
     CXXFLAGS += -DHAVE_XLSXWRITER
-    LDFLAGS += -lxlsxwriter
+    XLSX_LIBS = -lxlsxwriter -lpthread
     $(info Attempting to build with XLSX support)
 else
+    XLSX_LIBS = -lpthread
     $(info Building with XML Spreadsheet 2003 output only (xml-only specified))
 endif
 
@@ -53,11 +54,11 @@ $(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp | $(BUILD_DIR)
 $(TARGET): $(OBJECTS) | $(BIN_DIR)
 ifeq ($(XML_ONLY),0)
 	@echo "Linking with libxlsxwriter..."
-	@$(CXX) $(OBJECTS) $(LDFLAGS) -o $@ 2>/dev/null || \
+	@$(CXX) $(OBJECTS) $(XLSX_LIBS) -o $@ 2>/dev/null || \
 	(echo "libxlsxwriter linking failed - rebuilding with XML fallback..." && \
 	 $(MAKE) xml-only-internal)
 else
-	$(CXX) $(OBJECTS) $(LDFLAGS) -o $@
+	$(CXX) $(OBJECTS) $(XLSX_LIBS) -o $@
 endif
 
 # Internal target for automatic fallback (don't clean, just rebuild)
@@ -65,25 +66,28 @@ endif
 xml-only-internal:
 	@echo "Rebuilding object files without XLSX support..."
 	@$(CXX) -std=c++17 -pthread -Wall -Wextra -O2 -c $(SRC_DIR)/whistle.cpp -o $(BUILD_DIR)/whistle.o
-	@$(CXX) $(BUILD_DIR)/whistle.o -o $(TARGET)
+	@$(CXX) $(BUILD_DIR)/whistle.o -lpthread -o $(TARGET)
 	@echo "Successfully built with XML Spreadsheet 2003 fallback"
 
 # Optimized build
 .PHONY: release
 release: CXXFLAGS += $(OPT_FLAGS)
-release: clean $(TARGET)
+release: clean
+	@$(MAKE) all XLSX_LIBS="$(XLSX_LIBS)"
 	@echo "Built optimized release version"
 
 # Debug build
 .PHONY: debug
 debug: CXXFLAGS += $(DEBUG_FLAGS)
-debug: clean $(TARGET)
+debug: clean
+	@$(MAKE) all XLSX_LIBS="$(XLSX_LIBS)"
 	@echo "Built debug version"
 
 # Force XML mode (no XLSX even if available)
 .PHONY: xml-only
 xml-only: XML_ONLY = 1
-xml-only: clean $(TARGET)
+xml-only: clean
+	@$(MAKE) all XML_ONLY=1 XLSX_LIBS="-lpthread"
 	@echo "Built XML Spreadsheet 2003 only version"
 
 # Install system dependencies
