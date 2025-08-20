@@ -340,7 +340,26 @@ private:
                     if (key.substr(0, 11) == "expression.") {
                         std::string expr_name = key.substr(11);
                         try {
-                            std::regex pattern(value, std::regex_constants::icase);
+                            // Check for inline flags like (?i) at the beginning
+                            std::regex_constants::syntax_option_type flags = std::regex_constants::ECMAScript;
+                            std::string pattern_str = value;
+                            
+                            // Handle (?i) case-insensitive flag
+                            if (pattern_str.substr(0, 4) == "(?i)") {
+                                flags |= std::regex_constants::icase;
+                                pattern_str = pattern_str.substr(4); // Remove (?i) from pattern
+                            }
+                            // Handle (?-i) case-sensitive flag (explicit)
+                            else if (pattern_str.substr(0, 5) == "(?-i)") {
+                                // Default is case-sensitive, so just remove the flag
+                                pattern_str = pattern_str.substr(5); // Remove (?-i) from pattern
+                            }
+                            // Default case-insensitive behavior (as originally implemented)
+                            else {
+                                flags |= std::regex_constants::icase;
+                            }
+                            
+                            std::regex pattern(pattern_str, flags);
                             patterns.push_back({expr_name, std::move(pattern)});
                             std::cout << "Loaded expression: " << expr_name << " = " << value << std::endl;
                         } catch (const std::regex_error& e) {
