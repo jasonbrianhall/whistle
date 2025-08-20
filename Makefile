@@ -5,15 +5,17 @@ CXX = g++
 CXXFLAGS = -std=c++17 -pthread -Wall -Wextra -O2
 LDFLAGS = 
 
-# Check for libxlsxwriter availability
-XLSX_AVAILABLE := $(shell pkg-config --exists libxlsxwriter && echo 1 || echo 0)
+# Force XML mode flag
+XML_ONLY = 0
 
-ifeq ($(XLSX_AVAILABLE),1)
+# Set flags based on mode
+ifeq ($(XML_ONLY),0)
+    # Try XLSX first
     CXXFLAGS += -DHAVE_XLSXWRITER
     LDFLAGS += -lxlsxwriter
-    $(info Building with XLSX support)
+    $(info Attempting to build with XLSX support)
 else
-    $(info Building with XML Spreadsheet 2003 fallback (libxlsxwriter not found))
+    $(info Building with XML Spreadsheet 2003 output only (xml-only specified))
 endif
 
 # Optimized build flags
@@ -32,7 +34,7 @@ SOURCES = whistle.cpp
 OBJECTS = $(BUILD_DIR)/whistle.o
 TARGET = $(BIN_DIR)/whistle
 
-# Default target
+# Default target - try XLSX first, fallback to XML if it fails
 .PHONY: all
 all: $(TARGET)
 
@@ -47,9 +49,24 @@ $(BIN_DIR):
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-# Link executable
+# Link executable with fallback logic
 $(TARGET): $(OBJECTS) | $(BIN_DIR)
+ifeq ($(XML_ONLY),0)
+	@echo "Linking with libxlsxwriter..."
+	@$(CXX) $(OBJECTS) $(LDFLAGS) -o $@ 2>/dev/null || \
+	(echo "libxlsxwriter linking failed - rebuilding with XML fallback..." && \
+	 $(MAKE) xml-only-internal)
+else
 	$(CXX) $(OBJECTS) $(LDFLAGS) -o $@
+endif
+
+# Internal target for automatic fallback (don't clean, just rebuild)
+.PHONY: xml-only-internal
+xml-only-internal:
+	@echo "Rebuilding object files without XLSX support..."
+	@$(CXX) -std=c++17 -pthread -Wall -Wextra -O2 -c $(SRC_DIR)/whistle.cpp -o $(BUILD_DIR)/whistle.o
+	@$(CXX) $(BUILD_DIR)/whistle.o -o $(TARGET)
+	@echo "Successfully built with XML Spreadsheet 2003 fallback"
 
 # Optimized build
 .PHONY: release
@@ -65,8 +82,7 @@ debug: clean $(TARGET)
 
 # Force XML mode (no XLSX even if available)
 .PHONY: xml-only
-xml-only: CXXFLAGS := $(filter-out -DHAVE_XLSXWRITER,$(CXXFLAGS))
-xml-only: LDFLAGS := $(filter-out -lxlsxwriter,$(LDFLAGS))
+xml-only: XML_ONLY = 1
 xml-only: clean $(TARGET)
 	@echo "Built XML Spreadsheet 2003 only version"
 
@@ -99,15 +115,13 @@ install-deps:
 .PHONY: check-deps
 check-deps:
 	@echo "Checking dependencies..."
-	@if pkg-config --exists libxlsxwriter; then \
-		echo "✓ libxlsxwriter found - will use modern XLSX output"; \
-		pkg-config --modversion libxlsxwriter; \
+	@echo "Note: This Makefile will automatically try libxlsxwriter and fallback to XML if needed"
+	@if command -v $(CXX) >/dev/null 2>&1; then \
+		echo "✓ C++ compiler found: $(CXX)"; \
 	else \
-		echo "⚠ libxlsxwriter not found - will use XML Spreadsheet 2003 fallback"; \
-		echo "  XML Spreadsheet 2003 is fully Excel-compatible but lacks some advanced formatting"; \
-		echo "  To get XLSX support, install libxlsxwriter through your package manager"; \
-		echo "  or build it from source: https://libxlsxwriter.github.io/getting_started.html"; \
+		echo "✗ C++ compiler not found"; \
 	fi
+	@echo "Build will attempt XLSX first, then fallback to XML Spreadsheet 2003 if linking fails"
 
 # Clean build artifacts
 .PHONY: clean
