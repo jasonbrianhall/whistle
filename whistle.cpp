@@ -185,13 +185,14 @@ public:
             
             file << "  </Table>" << std::endl;
             
-            // Add worksheet options (freeze panes)
+            // Add worksheet options (freeze header row so it stays visible when scrolling)
             if (!rows.empty()) {
                 file << "  <WorksheetOptions xmlns=\"urn:schemas-microsoft-com:office:excel\">" << std::endl;
                 file << "   <FreezePanes/>" << std::endl;
                 file << "   <FrozenNoSplit/>" << std::endl;
                 file << "   <SplitHorizontal>1</SplitHorizontal>" << std::endl;
                 file << "   <TopRowBottomPane>1</TopRowBottomPane>" << std::endl;
+                file << "   <ActivePane>2</ActivePane>" << std::endl;
                 file << "  </WorksheetOptions>" << std::endl;
             }
             
@@ -635,7 +636,7 @@ private:
                 row++;
             }
             
-            // Freeze the header row
+            // Freeze the header row so it stays visible when scrolling
             worksheet_freeze_panes(worksheet, 1, 0);
             
             std::cout << "Created sheet: " << sheet_name << " with " << findings.size() << " findings" << std::endl;
@@ -679,7 +680,7 @@ private:
                     row++;
                 }
                 
-                // Freeze the header row
+                // Freeze the header row so it stays visible when scrolling
                 worksheet_freeze_panes(summary_worksheet, 1, 0);
                 
                 std::cout << "Created Summary sheet with " << all_findings.size() << " total findings" << std::endl;
