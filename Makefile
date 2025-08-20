@@ -13,15 +13,15 @@ ifeq ($(XML_ONLY),0)
     XLSX_TEST := $(shell echo 'int main(){return 0;}' | $(CXX) -x c++ -lxlsxwriter - -o /tmp/xlsx_test 2>/dev/null && echo 1 || echo 0; rm -f /tmp/xlsx_test 2>/dev/null)
     ifeq ($(XLSX_TEST),1)
         CXXFLAGS += -DHAVE_XLSXWRITER
-        LIBS = -lxlsxwriter -lpthread
+        LIBS = -lxlsxwriter -lpthread -lstdc++fs
         $(info Building with XLSX support)
     else
-        LIBS = -lpthread
+        LIBS = -lpthread -lstdc++fs
         $(info libxlsxwriter not available - building with XML Spreadsheet 2003 fallback)
     endif
 else
     # XML-only mode - skip all XLSX testing
-    LIBS = -lpthread
+    LIBS = -lpthread -lstdc++fs
     $(info Building with XML Spreadsheet 2003 output only (xml-only specified))
 endif
 
