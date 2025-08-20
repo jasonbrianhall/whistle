@@ -12,7 +12,207 @@
 #include <map>
 #include <iomanip>
 #include <sstream>
+
+// Check for libxlsxwriter availability
+#ifdef HAVE_XLSXWRITER
 #include <xlsxwriter.h>
+#define USE_XLSX 1
+#else
+#define USE_XLSX 0
+#endif
+
+// XML Spreadsheet 2003 writer (fallback when XLSX not available)
+class XMLSpreadsheetWriter {
+private:
+    std::ofstream file;
+    std::map<std::string, std::vector<std::vector<std::string>>> worksheets;
+    
+    std::string escapeXML(const std::string& text) {
+        std::string escaped = text;
+        size_t pos = 0;
+        
+        // Replace & first
+        while ((pos = escaped.find('&', pos)) != std::string::npos) {
+            escaped.replace(pos, 1, "&amp;");
+            pos += 5;
+        }
+        
+        pos = 0;
+        while ((pos = escaped.find('<', pos)) != std::string::npos) {
+            escaped.replace(pos, 1, "&lt;");
+            pos += 4;
+        }
+        
+        pos = 0;
+        while ((pos = escaped.find('>', pos)) != std::string::npos) {
+            escaped.replace(pos, 1, "&gt;");
+            pos += 4;
+        }
+        
+        pos = 0;
+        while ((pos = escaped.find('"', pos)) != std::string::npos) {
+            escaped.replace(pos, 1, "&quot;");
+            pos += 6;
+        }
+        
+        pos = 0;
+        while ((pos = escaped.find('\'', pos)) != std::string::npos) {
+            escaped.replace(pos, 1, "&apos;");
+            pos += 6;
+        }
+        
+        return escaped;
+    }
+    
+    std::string cleanSheetName(const std::string& name) {
+        std::string clean = name;
+        // Replace invalid characters
+        for (char& c : clean) {
+            if (c == '\\' || c == '/' || c == '?' || c == '*' || c == '[' || c == ']' || c == ':') {
+                c = '_';
+            }
+        }
+        // Limit to 31 characters (Excel limit)
+        if (clean.length() > 31) {
+            clean = clean.substr(0, 31);
+        }
+        return clean;
+    }
+    
+public:
+    XMLSpreadsheetWriter(const std::string& filename) : file(filename) {}
+    
+    void addWorksheet(const std::string& name) {
+        std::string clean_name = cleanSheetName(name);
+        worksheets[clean_name] = std::vector<std::vector<std::string>>();
+    }
+    
+    void addRow(const std::string& worksheet_name, const std::vector<std::string>& row) {
+        std::string clean_name = cleanSheetName(worksheet_name);
+        if (worksheets.find(clean_name) != worksheets.end()) {
+            worksheets[clean_name].push_back(row);
+        }
+    }
+    
+    bool writeFile() {
+        if (!file.is_open()) {
+            return false;
+        }
+        
+        // Write XML header
+        file << "<?xml version=\"1.0\"?>" << std::endl;
+        file << "<?mso-application progid=\"Excel.Sheet\"?>" << std::endl;
+        file << "<Workbook xmlns=\"urn:schemas-microsoft-com:office:spreadsheet\"" << std::endl;
+        file << " xmlns:o=\"urn:schemas-microsoft-com:office:office\"" << std::endl;
+        file << " xmlns:x=\"urn:schemas-microsoft-com:office:excel\"" << std::endl;
+        file << " xmlns:ss=\"urn:schemas-microsoft-com:office:spreadsheet\"" << std::endl;
+        file << " xmlns:html=\"http://www.w3.org/TR/REC-html40\">" << std::endl;
+        
+        // Write document properties
+        file << " <DocumentProperties xmlns=\"urn:schemas-microsoft-com:office:office\">" << std::endl;
+        file << "  <Created>" << std::chrono::system_clock::now().time_since_epoch().count() << "</Created>" << std::endl;
+        file << "  <Application>Regex Analyzer</Application>" << std::endl;
+        file << " </DocumentProperties>" << std::endl;
+        
+        // Write styles
+        file << " <Styles>" << std::endl;
+        file << "  <Style ss:ID=\"Header\">" << std::endl;
+        file << "   <Font ss:Bold=\"1\"/>" << std::endl;
+        file << "   <Interior ss:Color=\"#C0C0C0\" ss:Pattern=\"Solid\"/>" << std::endl;
+        file << "   <Borders>" << std::endl;
+        file << "    <Border ss:Position=\"Bottom\" ss:LineStyle=\"Continuous\" ss:Weight=\"1\"/>" << std::endl;
+        file << "    <Border ss:Position=\"Left\" ss:LineStyle=\"Continuous\" ss:Weight=\"1\"/>" << std::endl;
+        file << "    <Border ss:Position=\"Right\" ss:LineStyle=\"Continuous\" ss:Weight=\"1\"/>" << std::endl;
+        file << "    <Border ss:Position=\"Top\" ss:LineStyle=\"Continuous\" ss:Weight=\"1\"/>" << std::endl;
+        file << "   </Borders>" << std::endl;
+        file << "  </Style>" << std::endl;
+        file << "  <Style ss:ID=\"Cell\">" << std::endl;
+        file << "   <Borders>" << std::endl;
+        file << "    <Border ss:Position=\"Bottom\" ss:LineStyle=\"Continuous\" ss:Weight=\"1\"/>" << std::endl;
+        file << "    <Border ss:Position=\"Left\" ss:LineStyle=\"Continuous\" ss:Weight=\"1\"/>" << std::endl;
+        file << "    <Border ss:Position=\"Right\" ss:LineStyle=\"Continuous\" ss:Weight=\"1\"/>" << std::endl;
+        file << "    <Border ss:Position=\"Top\" ss:LineStyle=\"Continuous\" ss:Weight=\"1\"/>" << std::endl;
+        file << "   </Borders>" << std::endl;
+        file << "   <Alignment ss:Vertical=\"Top\" ss:WrapText=\"1\"/>" << std::endl;
+        file << "  </Style>" << std::endl;
+        file << " </Styles>" << std::endl;
+        
+        // Write worksheets
+        for (const auto& [sheet_name, rows] : worksheets) {
+            file << " <Worksheet ss:Name=\"" << escapeXML(sheet_name) << "\">" << std::endl;
+            file << "  <Table>" << std::endl;
+            
+            // Set column widths
+            file << "   <Column ss:Width=\"120\"/>" << std::endl; // Finding
+            file << "   <Column ss:Width=\"240\"/>" << std::endl; // File
+            file << "   <Column ss:Width=\"60\"/>" << std::endl;  // Line
+            file << "   <Column ss:Width=\"120\"/>" << std::endl; // Comments
+            file << "   <Column ss:Width=\"90\"/>" << std::endl;  // Ease
+            file << "   <Column ss:Width=\"90\"/>" << std::endl;  // Significance
+            file << "   <Column ss:Width=\"90\"/>" << std::endl;  // Risk
+            file << "   <Column ss:Width=\"360\"/>" << std::endl; // Statement
+            
+            for (size_t i = 0; i < rows.size(); ++i) {
+                const auto& row = rows[i];
+                file << "   <Row>" << std::endl;
+                
+                for (size_t j = 0; j < row.size(); ++j) {
+                    std::string style_id = (i == 0) ? "Header" : "Cell";
+                    std::string cell_data = escapeXML(row[j]);
+                    
+                    // Check if it's a number (for line numbers)
+                    bool is_number = false;
+                    if (j == 2 && i > 0) { // Line number column, not header
+                        try {
+                            std::stoi(row[j]);
+                            is_number = true;
+                        } catch (...) {
+                            is_number = false;
+                        }
+                    }
+                    
+                    file << "    <Cell ss:StyleID=\"" << style_id << "\">" << std::endl;
+                    if (is_number) {
+                        file << "     <Data ss:Type=\"Number\">" << cell_data << "</Data>" << std::endl;
+                    } else {
+                        file << "     <Data ss:Type=\"String\">" << cell_data << "</Data>" << std::endl;
+                    }
+                    file << "    </Cell>" << std::endl;
+                }
+                
+                file << "   </Row>" << std::endl;
+            }
+            
+            file << "  </Table>" << std::endl;
+            
+            // Add worksheet options (freeze panes)
+            if (!rows.empty()) {
+                file << "  <WorksheetOptions xmlns=\"urn:schemas-microsoft-com:office:excel\">" << std::endl;
+                file << "   <FreezePanes/>" << std::endl;
+                file << "   <FrozenNoSplit/>" << std::endl;
+                file << "   <SplitHorizontal>1</SplitHorizontal>" << std::endl;
+                file << "   <TopRowBottomPane>1</TopRowBottomPane>" << std::endl;
+                file << "  </WorksheetOptions>" << std::endl;
+            }
+            
+            file << " </Worksheet>" << std::endl;
+        }
+        
+        file << "</Workbook>" << std::endl;
+        
+        return true;
+    }
+    
+    bool isOpen() const {
+        return file.is_open();
+    }
+    
+    ~XMLSpreadsheetWriter() {
+        if (file.is_open()) {
+            file.close();
+        }
+    }
+};
 
 struct Finding {
     std::string expression_name;
@@ -325,8 +525,17 @@ public:
         writeResults(output_file);
     }
     
-private:
     void writeResults(const std::string& output_filename) {
+#if USE_XLSX
+        writeXLSXResults(output_filename);
+#else
+        writeXMLSpreadsheetResults(output_filename);
+#endif
+    }
+    
+private:
+#if USE_XLSX
+    void writeXLSXResults(const std::string& output_filename) {
         // Create workbook
         lxw_workbook* workbook = workbook_new(output_filename.c_str());
         if (!workbook) {
@@ -464,13 +673,95 @@ private:
         
         std::cout << "Successfully created Excel file: " << output_filename << std::endl;
     }
+#endif
+    
+    void writeXMLSpreadsheetResults(const std::string& output_filename) {
+        // Ensure .xml extension
+        std::string xml_filename = output_filename;
+        if (xml_filename.find_last_of('.') == std::string::npos) {
+            xml_filename += ".xml";
+        } else {
+            size_t dot_pos = xml_filename.find_last_of('.');
+            std::string ext = xml_filename.substr(dot_pos);
+            if (ext != ".xml") {
+                xml_filename = xml_filename.substr(0, dot_pos) + ".xml";
+            }
+        }
+        
+        XMLSpreadsheetWriter writer(xml_filename);
+        if (!writer.isOpen()) {
+            throw std::runtime_error("Failed to create XML spreadsheet: " + xml_filename);
+        }
+        
+        // Group findings by expression
+        std::map<std::string, std::vector<Finding>> grouped_findings;
+        
+        for (const auto& finding : all_findings) {
+            grouped_findings[finding.expression_name].push_back(finding);
+        }
+        
+        // Create worksheet for each expression
+        for (const auto& [expr_name, findings] : grouped_findings) {
+            writer.addWorksheet(expr_name);
+            
+            // Add header row
+            writer.addRow(expr_name, {"Finding", "File", "Line", "Comments", "Ease", "Significance", "Risk", "Statement"});
+            
+            // Add findings
+            for (const auto& finding : findings) {
+                writer.addRow(expr_name, {
+                    finding.expression_name,
+                    finding.filename,
+                    std::to_string(finding.line_number),
+                    "", // Comments (blank)
+                    "", // Ease (blank)
+                    "", // Significance (blank)
+                    "", // Risk (blank)
+                    finding.statement
+                });
+            }
+            
+            std::cout << "Created sheet: " << expr_name << " with " << findings.size() << " findings" << std::endl;
+        }
+        
+        // Create a summary worksheet with all findings
+        if (!all_findings.empty()) {
+            writer.addWorksheet("Summary");
+            
+            // Add header row
+            writer.addRow("Summary", {"Finding", "File", "Line", "Comments", "Ease", "Significance", "Risk", "Statement"});
+            
+            // Add all findings
+            for (const auto& finding : all_findings) {
+                writer.addRow("Summary", {
+                    finding.expression_name,
+                    finding.filename,
+                    std::to_string(finding.line_number),
+                    "", // Comments (blank)
+                    "", // Ease (blank)
+                    "", // Significance (blank)
+                    "", // Risk (blank)
+                    finding.statement
+                });
+            }
+            
+            std::cout << "Created Summary sheet with " << all_findings.size() << " total findings" << std::endl;
+        }
+        
+        if (!writer.writeFile()) {
+            throw std::runtime_error("Failed to write XML spreadsheet file");
+        }
+        
+        std::cout << "Successfully created XML Spreadsheet file: " << xml_filename << std::endl;
+        std::cout << "This file can be opened in Excel, LibreOffice Calc, or Google Sheets" << std::endl;
+    }
 };
 
 void printUsage(const char* program_name) {
     std::cout << "Usage: " << program_name << " <directory> <expressions_file> <output_file> [num_threads]" << std::endl;
     std::cout << "  directory:        Directory to search for text files" << std::endl;
     std::cout << "  expressions_file: Path to expressions.properties file" << std::endl;
-    std::cout << "  output_file:      Base name for output CSV files" << std::endl;
+    std::cout << "  output_file:      Base name for output files" << std::endl;
     std::cout << "  num_threads:      Number of worker threads (default: 4)" << std::endl;
     std::cout << std::endl;
     std::cout << "Example expressions.properties format:" << std::endl;
@@ -490,6 +781,12 @@ int main(int argc, char* argv[]) {
     std::string output_file = argv[3];
     int num_threads = (argc == 5) ? std::stoi(argv[4]) : 4;
     
+#if USE_XLSX
+    std::cout << "Using XLSX output format" << std::endl;
+#else
+    std::cout << "Using XML Spreadsheet 2003 output format (XLSX library not available)" << std::endl;
+#endif
+    
     try {
         RegexAnalyzer analyzer;
         analyzer.analyze(directory, expressions_file, output_file, num_threads);
@@ -504,13 +801,17 @@ int main(int argc, char* argv[]) {
 }
 
 // Compilation instructions:
-// First install libxlsxwriter:
-//   Ubuntu/Debian: sudo apt-get install libxlsxwriter-dev
-//   CentOS/RHEL: sudo yum install libxlsxwriter-devel
-//   macOS: brew install libxlsxwriter
+// For systems with libxlsxwriter:
+//   g++ -std=c++17 -pthread -O2 -DHAVE_XLSXWRITER -o regex_analyzer regex_analyzer.cpp -lxlsxwriter
 //
-// Then compile:
-// g++ -std=c++17 -pthread -O2 -o regex_analyzer regex_analyzer.cpp -lxlsxwriter
+// For systems without libxlsxwriter (RHEL8, etc) - uses XML Spreadsheet 2003:
+//   g++ -std=c++17 -pthread -O2 -o regex_analyzer regex_analyzer.cpp
 //
-// Or with additional optimization:
-// g++ -std=c++17 -pthread -O3 -march=native -o regex_analyzer regex_analyzer.cpp -lxlsxwriter
+// Build from source libxlsxwriter on RHEL8:
+//   wget https://github.com/jmcnamara/libxlsxwriter/archive/RELEASE_1.1.5.tar.gz
+//   tar -xzf RELEASE_1.1.5.tar.gz
+//   cd libxlsxwriter-RELEASE_1.1.5
+//   make
+//   sudo make install
+//   sudo ldconfig
+//   g++ -std=c++17 -pthread -O2 -DHAVE_XLSXWRITER -o regex_analyzer regex_analyzer.cpp -lxlsxwriter

@@ -3,6 +3,109 @@
 # Compiler and flags
 CXX = g++
 CXXFLAGS = -std=c++17 -pthread -Wall -Wextra -O2
+LDFLAGS = 
+
+# Check for libxlsxwriter availability
+XLSX_AVAILABLE := $(shell pkg-config --exists libxlsxwriter && echo 1 || echo 0)
+
+ifeq ($(XLSX_AVAILABLE),1)
+    CXXFLAGS += -DHAVE_XLSXWRITER
+    LDFLAGS += -lxlsxwriter
+    $(info Building with XLSX support)
+else
+    $(info Building with CSV fallback (libxlsxwriter not found))
+endif
+
+# Optimized build flags
+OPT_FLAGS = -O3 -march=native -DNDEBUG
+
+# Debug flags
+DEBUG_FLAGS = -g -O0 -DDEBUG
+
+# Directories
+SRC_DIR = .
+BUILD_DIR = build
+BIN_DIR = bin
+
+# Source files
+SOURCES = whistle.cpp
+OBJECTS = $(BUILD_DIR)/whistle.o
+TARGET = $(BIN_DIR)/whistle
+
+# Default target
+.PHONY: all
+all: $(TARGET)
+
+# Create directories if they don't exist
+$(BUILD_DIR):
+	mkdir -p $(BUILD_DIR)
+
+$(BIN_DIR):
+	mkdir -p $(BIN_DIR)
+
+# Compile object files
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp | $(BUILD_DIR)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+# Link executable
+$(TARGET): $(OBJECTS) | $(BIN_DIR)
+	$(CXX) $(OBJECTS) $(LDFLAGS) -o $@
+
+# Optimized build
+.PHONY: release
+release: CXXFLAGS += $(OPT_FLAGS)
+release: clean $(TARGET)
+	@echo "Built optimized release version"
+
+# Debug build
+.PHONY: debug
+debug: CXXFLAGS += $(DEBUG_FLAGS)
+debug: clean $(TARGET)
+	@echo "Built debug version"
+
+# Force CSV mode (no XLSX even if available)
+.PHONY: csv-only
+csv-only: CXXFLAGS := $(filter-out -DHAVE_XLSXWRITER,$(CXXFLAGS))
+csv-only: LDFLAGS := $(filter-out -lxlsxwriter,$(LDFLAGS))
+csv-only: clean $(TARGET)
+	@echo "Built CSV-only version"
+
+# Install system dependencies
+.PHONY: install-deps
+install-deps:
+	@echo "Installing dependencies for your system..."
+	@if command -v apt-get >/dev/null 2>&1; then \
+		echo "Detected Debian/Ubuntu"; \
+		sudo apt-get update && sudo apt-get install -y libxlsxwriter-dev; \
+	elif command -v yum >/dev/null 2>&1; then \
+		echo "Detected RHEL/CentOS - building from source"; \
+		$(MAKE) install-xlsx-from-source; \
+	elif command -v dnf >/dev/null 2>&1; then \
+		echo "Detected Fedora"; \
+		sudo dnf install -y libxlsxwriter-devel || $(MAKE) install-xlsx-from-source; \
+	elif command -v brew >/dev/null 2>&1; then \
+		echo "Detected macOS"; \
+		brew install libxlsxwriter; \
+	elif command -v pacman >/dev/null 2>&1; then \
+		echo "Detected Arch Linux"; \
+		sudo pacman -S libxlsxwriter; \
+	else \
+		echo "Package manager not detected. Building from source..."; \
+		$(MAKE) install-xlsx-from-source; \
+	fi
+	@echo "Dependencies installation complete"
+
+# Build libxlsxwriter from source (for RHEL8, etc.)
+.PHONY: install-xlsx-from-source
+install-xlsx-from-source:
+	@echo "Building libxlsxwriter from source..."
+	@if [ ! -d "libxlsxwriter-build" ]; then \
+		echo "Downloading libxlsxwriter..."; \
+		wget -O libxlsxwriter.tar.gz# Makefile for Multi-threaded Text File Regex Analyzer
+
+# Compiler and flags
+CXX = g++
+CXXFLAGS = -std=c++17 -pthread -Wall -Wextra -O2
 LDFLAGS = -lxlsxwriter
 
 # Optimized build flags
