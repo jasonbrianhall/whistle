@@ -56,16 +56,18 @@ ifeq ($(XML_ONLY),0)
 	@echo "Linking with libxlsxwriter..."
 	@$(CXX) $(OBJECTS) $(XLSX_LIBS) -o $@ 2>/dev/null || \
 	(echo "libxlsxwriter linking failed - rebuilding with XML fallback..." && \
+	 rm -f $(OBJECTS) && \
 	 $(MAKE) xml-only-internal)
 else
 	$(CXX) $(OBJECTS) $(XLSX_LIBS) -o $@
 endif
 
-# Internal target for automatic fallback (don't clean, just rebuild)
+# Internal target for automatic fallback (clean objects and rebuild without XLSX)
 .PHONY: xml-only-internal
 xml-only-internal:
-	@echo "Rebuilding object files without XLSX support..."
+	@echo "Rebuilding source without XLSX support..."
 	@$(CXX) -std=c++17 -pthread -Wall -Wextra -O2 -c $(SRC_DIR)/whistle.cpp -o $(BUILD_DIR)/whistle.o
+	@echo "Linking with XML Spreadsheet 2003 support..."
 	@$(CXX) $(BUILD_DIR)/whistle.o -lpthread -o $(TARGET)
 	@echo "Successfully built with XML Spreadsheet 2003 fallback"
 
