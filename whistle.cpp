@@ -12,41 +12,7 @@
 #include <map>
 #include <iomanip>
 #include <sstream>
-
-// Simple CSV writer for Excel compatibility
-class CSVWriter {
-private:
-    std::ofstream file;
-    
-public:
-    CSVWriter(const std::string& filename) : file(filename) {}
-    
-    void writeRow(const std::vector<std::string>& row) {
-        for (size_t i = 0; i < row.size(); ++i) {
-            if (i > 0) file << ",";
-            // Escape quotes and wrap in quotes if contains comma or quote
-            std::string cell = row[i];
-            if (cell.find(',') != std::string::npos || cell.find('"') != std::string::npos) {
-                // Escape existing quotes by doubling them
-                size_t pos = 0;
-                while ((pos = cell.find('"', pos)) != std::string::npos) {
-                    cell.replace(pos, 1, "\"\"");
-                    pos += 2;
-                }
-                file << "\"" << cell << "\"";
-            } else {
-                file << cell;
-            }
-        }
-        file << std::endl;
-    }
-    
-    ~CSVWriter() {
-        if (file.is_open()) {
-            file.close();
-        }
-    }
-};
+#include <xlsxwriter.h>
 
 struct Finding {
     std::string expression_name;
@@ -360,7 +326,23 @@ public:
     }
     
 private:
-    void writeResults(const std::string& base_filename) {
+    void writeResults(const std::string& output_filename) {
+        // Create workbook
+        lxw_workbook* workbook = workbook_new(output_filename.c_str());
+        if (!workbook) {
+            throw std::runtime_error("Failed to create Excel workbook: " + output_filename);
+        }
+        
+        // Create formats
+        lxw_format* header_format = workbook_add_format(workbook);
+        format_set_bold(header_format);
+        format_set_bg_color(header_format, LXW_COLOR_GRAY);
+        format_set_border(header_format, LXW_BORDER_THIN);
+        
+        lxw_format* cell_format = workbook_add_format(workbook);
+        format_set_border(cell_format, LXW_BORDER_THIN);
+        format_set_text_wrap(cell_format);
+        
         // Group findings by expression
         std::map<std::string, std::vector<Finding>> grouped_findings;
         
@@ -368,61 +350,119 @@ private:
             grouped_findings[finding.expression_name].push_back(finding);
         }
         
-        // Create separate CSV files for each expression (Excel tabs)
+        // Create worksheet for each expression
         for (const auto& [expr_name, findings] : grouped_findings) {
-            std::string filename = base_filename;
-            size_t dot_pos = filename.find_last_of('.');
-            if (dot_pos != std::string::npos) {
-                filename = filename.substr(0, dot_pos) + "_" + expr_name + ".csv";
-            } else {
-                filename += "_" + expr_name + ".csv";
+            // Clean sheet name (Excel has restrictions on sheet names)
+            std::string sheet_name = expr_name;
+            // Replace invalid characters
+            for (char& c : sheet_name) {
+                if (c == '\\' || c == '/' || c == '?' || c == '*' || c == '[' || c == ']' || c == ':') {
+                    c = '_';
+                }
+            }
+            // Limit to 31 characters (Excel limit)
+            if (sheet_name.length() > 31) {
+                sheet_name = sheet_name.substr(0, 31);
             }
             
-            CSVWriter writer(filename);
+            lxw_worksheet* worksheet = workbook_add_worksheet(workbook, sheet_name.c_str());
+            if (!worksheet) {
+                std::cerr << "Failed to create worksheet: " << sheet_name << std::endl;
+                continue;
+            }
             
-            // Write header
-            writer.writeRow({"Finding", "File", "Line", "Comments", "Ease", "Significance", "Risk", "Statement"});
+            // Set column widths
+            worksheet_set_column(worksheet, 0, 0, 20, nullptr); // Finding
+            worksheet_set_column(worksheet, 1, 1, 40, nullptr); // File
+            worksheet_set_column(worksheet, 2, 2, 10, nullptr); // Line
+            worksheet_set_column(worksheet, 3, 3, 20, nullptr); // Comments
+            worksheet_set_column(worksheet, 4, 4, 15, nullptr); // Ease
+            worksheet_set_column(worksheet, 5, 5, 15, nullptr); // Significance
+            worksheet_set_column(worksheet, 6, 6, 15, nullptr); // Risk
+            worksheet_set_column(worksheet, 7, 7, 60, nullptr); // Statement
+            
+            // Write headers
+            worksheet_write_string(worksheet, 0, 0, "Finding", header_format);
+            worksheet_write_string(worksheet, 0, 1, "File", header_format);
+            worksheet_write_string(worksheet, 0, 2, "Line", header_format);
+            worksheet_write_string(worksheet, 0, 3, "Comments", header_format);
+            worksheet_write_string(worksheet, 0, 4, "Ease", header_format);
+            worksheet_write_string(worksheet, 0, 5, "Significance", header_format);
+            worksheet_write_string(worksheet, 0, 6, "Risk", header_format);
+            worksheet_write_string(worksheet, 0, 7, "Statement", header_format);
             
             // Write findings
+            int row = 1;
             for (const auto& finding : findings) {
-                writer.writeRow({
-                    expr_name,
-                    finding.filename,
-                    std::to_string(finding.line_number),
-                    "", // Comments (blank)
-                    "", // Ease (blank)  
-                    "", // Significance (blank)
-                    "", // Risk (blank)
-                    finding.statement
-                });
+                worksheet_write_string(worksheet, row, 0, finding.expression_name.c_str(), cell_format);
+                worksheet_write_string(worksheet, row, 1, finding.filename.c_str(), cell_format);
+                worksheet_write_number(worksheet, row, 2, finding.line_number, cell_format);
+                worksheet_write_string(worksheet, row, 3, "", cell_format); // Comments (blank)
+                worksheet_write_string(worksheet, row, 4, "", cell_format); // Ease (blank)
+                worksheet_write_string(worksheet, row, 5, "", cell_format); // Significance (blank)
+                worksheet_write_string(worksheet, row, 6, "", cell_format); // Risk (blank)
+                worksheet_write_string(worksheet, row, 7, finding.statement.c_str(), cell_format);
+                row++;
             }
             
-            std::cout << "Created: " << filename << " with " << findings.size() << " findings" << std::endl;
+            // Freeze the header row
+            worksheet_freeze_panes(worksheet, 1, 0);
+            
+            std::cout << "Created sheet: " << sheet_name << " with " << findings.size() << " findings" << std::endl;
         }
         
-        // Also create a summary file with all findings
-        std::string summary_filename = base_filename;
-        size_t dot_pos = summary_filename.find_last_of('.');
-        if (dot_pos != std::string::npos) {
-            summary_filename = summary_filename.substr(0, dot_pos) + "_summary.csv";
-        } else {
-            summary_filename += "_summary.csv";
+        // Create a summary worksheet with all findings
+        if (!all_findings.empty()) {
+            lxw_worksheet* summary_worksheet = workbook_add_worksheet(workbook, "Summary");
+            if (summary_worksheet) {
+                // Set column widths
+                worksheet_set_column(summary_worksheet, 0, 0, 20, nullptr); // Finding
+                worksheet_set_column(summary_worksheet, 1, 1, 40, nullptr); // File
+                worksheet_set_column(summary_worksheet, 2, 2, 10, nullptr); // Line
+                worksheet_set_column(summary_worksheet, 3, 3, 20, nullptr); // Comments
+                worksheet_set_column(summary_worksheet, 4, 4, 15, nullptr); // Ease
+                worksheet_set_column(summary_worksheet, 5, 5, 15, nullptr); // Significance
+                worksheet_set_column(summary_worksheet, 6, 6, 15, nullptr); // Risk
+                worksheet_set_column(summary_worksheet, 7, 7, 60, nullptr); // Statement
+                
+                // Write headers
+                worksheet_write_string(summary_worksheet, 0, 0, "Finding", header_format);
+                worksheet_write_string(summary_worksheet, 0, 1, "File", header_format);
+                worksheet_write_string(summary_worksheet, 0, 2, "Line", header_format);
+                worksheet_write_string(summary_worksheet, 0, 3, "Comments", header_format);
+                worksheet_write_string(summary_worksheet, 0, 4, "Ease", header_format);
+                worksheet_write_string(summary_worksheet, 0, 5, "Significance", header_format);
+                worksheet_write_string(summary_worksheet, 0, 6, "Risk", header_format);
+                worksheet_write_string(summary_worksheet, 0, 7, "Statement", header_format);
+                
+                // Write all findings
+                int row = 1;
+                for (const auto& finding : all_findings) {
+                    worksheet_write_string(summary_worksheet, row, 0, finding.expression_name.c_str(), cell_format);
+                    worksheet_write_string(summary_worksheet, row, 1, finding.filename.c_str(), cell_format);
+                    worksheet_write_number(summary_worksheet, row, 2, finding.line_number, cell_format);
+                    worksheet_write_string(summary_worksheet, row, 3, "", cell_format); // Comments (blank)
+                    worksheet_write_string(summary_worksheet, row, 4, "", cell_format); // Ease (blank)
+                    worksheet_write_string(summary_worksheet, row, 5, "", cell_format); // Significance (blank)
+                    worksheet_write_string(summary_worksheet, row, 6, "", cell_format); // Risk (blank)
+                    worksheet_write_string(summary_worksheet, row, 7, finding.statement.c_str(), cell_format);
+                    row++;
+                }
+                
+                // Freeze the header row
+                worksheet_freeze_panes(summary_worksheet, 1, 0);
+                
+                std::cout << "Created Summary sheet with " << all_findings.size() << " total findings" << std::endl;
+            }
         }
         
-        CSVWriter summary_writer(summary_filename);
-        summary_writer.writeRow({"Finding", "File", "Line", "Comments", "Ease", "Significance", "Risk", "Statement"});
-        
-        for (const auto& finding : all_findings) {
-            summary_writer.writeRow({
-                finding.expression_name,
-                finding.filename,
-                std::to_string(finding.line_number),
-                "", "", "", "",
-                finding.statement
-            });
+        // Close workbook
+        lxw_error error = workbook_close(workbook);
+        if (error != LXW_NO_ERROR) {
+            throw std::runtime_error("Failed to save Excel workbook: " + std::string(lxw_strerror(error)));
         }
         
-        std::cout << "Created summary: " << summary_filename << " with " << all_findings.size() << " total findings" << std::endl;
+        std::cout << "Successfully created Excel file: " << output_filename << std::endl;
     }
 };
 
@@ -464,7 +504,13 @@ int main(int argc, char* argv[]) {
 }
 
 // Compilation instructions:
-// g++ -std=c++17 -pthread -O2 -o regex_analyzer regex_analyzer.cpp
+// First install libxlsxwriter:
+//   Ubuntu/Debian: sudo apt-get install libxlsxwriter-dev
+//   CentOS/RHEL: sudo yum install libxlsxwriter-devel
+//   macOS: brew install libxlsxwriter
+//
+// Then compile:
+// g++ -std=c++17 -pthread -O2 -o regex_analyzer regex_analyzer.cpp -lxlsxwriter
 //
 // Or with additional optimization:
-// g++ -std=c++17 -pthread -O3 -march=native -o regex_analyzer regex_analyzer.cpp
+// g++ -std=c++17 -pthread -O3 -march=native -o regex_analyzer regex_analyzer.cpp -lxlsxwriter
