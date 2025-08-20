@@ -218,7 +218,8 @@ struct Finding {
     std::string expression_name;
     std::string filename;
     int line_number;
-    std::string statement;
+    std::string actual_match;  // The actual text that matched the regex
+    std::string statement;     // The full line containing the match
 };
 
 struct ExpressionPattern {
@@ -452,7 +453,8 @@ private:
                     finding.expression_name = expr.name;
                     finding.filename = filepath;
                     finding.line_number = line_number;
-                    finding.statement = line;
+                    finding.actual_match = match.str();  // The actual matched text
+                    finding.statement = line;            // The full line
                     local_findings.push_back(finding);
                 }
             }
@@ -603,14 +605,14 @@ private:
             // Write findings
             int row = 1;
             for (const auto& finding : findings) {
-                worksheet_write_string(worksheet, row, 0, finding.expression_name.c_str(), cell_format);
+                worksheet_write_string(worksheet, row, 0, finding.actual_match.c_str(), cell_format);  // Actual match
                 worksheet_write_string(worksheet, row, 1, finding.filename.c_str(), cell_format);
                 worksheet_write_number(worksheet, row, 2, finding.line_number, cell_format);
                 worksheet_write_string(worksheet, row, 3, "", cell_format); // Comments (blank)
                 worksheet_write_string(worksheet, row, 4, "", cell_format); // Ease (blank)
                 worksheet_write_string(worksheet, row, 5, "", cell_format); // Significance (blank)
                 worksheet_write_string(worksheet, row, 6, "", cell_format); // Risk (blank)
-                worksheet_write_string(worksheet, row, 7, finding.statement.c_str(), cell_format);
+                worksheet_write_string(worksheet, row, 7, finding.statement.c_str(), cell_format);     // Full line
                 row++;
             }
             
@@ -647,14 +649,14 @@ private:
                 // Write all findings
                 int row = 1;
                 for (const auto& finding : all_findings) {
-                    worksheet_write_string(summary_worksheet, row, 0, finding.expression_name.c_str(), cell_format);
+                    worksheet_write_string(summary_worksheet, row, 0, finding.actual_match.c_str(), cell_format);  // Actual match
                     worksheet_write_string(summary_worksheet, row, 1, finding.filename.c_str(), cell_format);
                     worksheet_write_number(summary_worksheet, row, 2, finding.line_number, cell_format);
                     worksheet_write_string(summary_worksheet, row, 3, "", cell_format); // Comments (blank)
                     worksheet_write_string(summary_worksheet, row, 4, "", cell_format); // Ease (blank)
                     worksheet_write_string(summary_worksheet, row, 5, "", cell_format); // Significance (blank)
                     worksheet_write_string(summary_worksheet, row, 6, "", cell_format); // Risk (blank)
-                    worksheet_write_string(summary_worksheet, row, 7, finding.statement.c_str(), cell_format);
+                    worksheet_write_string(summary_worksheet, row, 7, finding.statement.c_str(), cell_format);     // Full line
                     row++;
                 }
                 
@@ -710,14 +712,14 @@ private:
             // Add findings
             for (const auto& finding : findings) {
                 writer.addRow(expr_name, {
-                    finding.expression_name,
+                    finding.actual_match,        // Actual regex match
                     finding.filename,
                     std::to_string(finding.line_number),
                     "", // Comments (blank)
                     "", // Ease (blank)
                     "", // Significance (blank)
                     "", // Risk (blank)
-                    finding.statement
+                    finding.statement            // Full line
                 });
             }
             
@@ -734,14 +736,14 @@ private:
             // Add all findings
             for (const auto& finding : all_findings) {
                 writer.addRow("Summary", {
-                    finding.expression_name,
+                    finding.actual_match,        // Actual regex match
                     finding.filename,
                     std::to_string(finding.line_number),
                     "", // Comments (blank)
                     "", // Ease (blank)
                     "", // Significance (blank)
                     "", // Risk (blank)
-                    finding.statement
+                    finding.statement            // Full line
                 });
             }
             
