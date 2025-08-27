@@ -410,35 +410,95 @@ void RegexAnalyzer::processFile(const std::string& filepath) {
             return;
         }
         
-        std::string line;
-        int line_number = 0;
         std::vector<Finding> local_findings;
         local_findings.reserve(100);
         
-        while (std::getline(file, line)) {
-            line_number++;
+        const size_t CHUNK_SIZE = 64 * 1024; // 64KB chunks
+        char buffer[CHUNK_SIZE + 1]; // +1 for null terminator
+        std::string leftover;
+        int line_number = 1;
+        
+        while (file.read(buffer, CHUNK_SIZE) || file.gcount() > 0) {
+            std::streamsize bytes_read = file.gcount();
+            buffer[bytes_read] = '\0'; // Null terminate
             
-            // Safety check for expressions vector
-            if (expressions.empty()) {
-                std::cerr << "Warning: No expressions loaded" << std::endl;
-                break;
+            std::string chunk = leftover + std::string(buffer, bytes_read);
+            leftover.clear();
+            
+            size_t start = 0;
+            size_t pos = 0;
+            
+            // Process complete lines within the chunk
+            while ((pos = chunk.find('\n', start)) != std::string::npos) {
+                std::string line = chunk.substr(start, pos - start);
+                
+                // Remove carriage return if present
+                if (!line.empty() && line.back() == '\r') {
+                    line.pop_back();
+                }
+                
+                // Process this complete line with all expressions
+                for (size_t expr_idx = 0; expr_idx < expressions.size(); ++expr_idx) {
+                    try {
+                        const auto& expr = expressions[expr_idx];
+                        
+                        if (expr.name.empty()) {
+                            continue;
+                        }
+                        
+                        std::sregex_iterator regex_start(line.begin(), line.end(), expr.pattern);
+                        std::sregex_iterator regex_end;
+                        
+                        for (std::sregex_iterator i = regex_start; i != regex_end; ++i) {
+                            std::smatch match = *i;
+                            
+                            Finding finding;
+                            finding.expression_name = expr.name;
+                            finding.filename = filepath;
+                            finding.line_number = line_number;
+                            finding.actual_match = match.str();
+                            finding.statement = line;
+                            
+                            local_findings.push_back(std::move(finding));
+                        }
+                        
+                    } catch (const std::regex_error& e) {
+                        std::cerr << "Regex error in expression " << expr_idx 
+                                 << " on line " << line_number 
+                                 << " in " << filepath << ": " << e.what() << std::endl;
+                        continue;
+                    } catch (const std::exception& e) {
+                        std::cerr << "Error processing expression " << expr_idx 
+                                 << " on line " << line_number 
+                                 << " in " << filepath << ": " << e.what() << std::endl;
+                        continue;
+                    }
+                }
+                
+                line_number++;
+                start = pos + 1;
             }
             
-            // Process each expression with bounds checking
+            // Save any remaining partial line for next chunk
+            if (start < chunk.size()) {
+                leftover = chunk.substr(start);
+            }
+        }
+        
+        // Process any remaining content in leftover (file didn't end with newline)
+        if (!leftover.empty()) {
             for (size_t expr_idx = 0; expr_idx < expressions.size(); ++expr_idx) {
                 try {
                     const auto& expr = expressions[expr_idx];
                     
-                    // Safety check for empty pattern name
                     if (expr.name.empty()) {
                         continue;
                     }
                     
-                    // Use iterator-based regex search for better memory handling on long lines
-                    std::sregex_iterator start(line.begin(), line.end(), expr.pattern);
-                    std::sregex_iterator end;
+                    std::sregex_iterator regex_start(leftover.begin(), leftover.end(), expr.pattern);
+                    std::sregex_iterator regex_end;
                     
-                    for (std::sregex_iterator i = start; i != end; ++i) {
+                    for (std::sregex_iterator i = regex_start; i != regex_end; ++i) {
                         std::smatch match = *i;
                         
                         Finding finding;
@@ -446,20 +506,18 @@ void RegexAnalyzer::processFile(const std::string& filepath) {
                         finding.filename = filepath;
                         finding.line_number = line_number;
                         finding.actual_match = match.str();
-                        finding.statement = line;
+                        finding.statement = leftover;
                         
                         local_findings.push_back(std::move(finding));
                     }
                     
                 } catch (const std::regex_error& e) {
                     std::cerr << "Regex error in expression " << expr_idx 
-                             << " on line " << line_number 
-                             << " in " << filepath << ": " << e.what() << std::endl;
+                             << " on final line in " << filepath << ": " << e.what() << std::endl;
                     continue;
                 } catch (const std::exception& e) {
                     std::cerr << "Error processing expression " << expr_idx 
-                             << " on line " << line_number 
-                             << " in " << filepath << ": " << e.what() << std::endl;
+                             << " on final line in " << filepath << ": " << e.what() << std::endl;
                     continue;
                 }
             }
