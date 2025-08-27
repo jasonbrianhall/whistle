@@ -452,20 +452,6 @@ std::vector<std::string> RegexAnalyzer::findTextFiles(const std::string& directo
         for (const auto& entry : std::filesystem::recursive_directory_iterator(directory)) {
             try {
                 if (entry.is_regular_file()) {
-                    auto file_size = entry.file_size();
-                    
-                    // Skip very large files (>100MB) to avoid memory issues
-                    if (file_size > 100 * 1024 * 1024) {
-                        std::cout << "Skipping large file: " << entry.path() 
-                                 << " (size: " << file_size << " bytes)" << std::endl;
-                        continue;
-                    }
-                    
-                    // Skip empty files
-                    if (file_size == 0) {
-                        continue;
-                    }
-                    
                     if (isTextFile(entry.path().string())) {
                         text_files.push_back(entry.path().string());
                     }
