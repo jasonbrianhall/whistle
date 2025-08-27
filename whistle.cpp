@@ -413,80 +413,107 @@ void RegexAnalyzer::processFile(const std::string& filepath) {
         std::vector<Finding> local_findings;
         local_findings.reserve(100);
         
-        const size_t CHUNK_SIZE = 64 * 1024; // 64KB chunks
-        char buffer[CHUNK_SIZE + 1]; // +1 for null terminator
-        std::string leftover;
-        int line_number = 1;
+        const size_t BUFFER_SIZE = 64 * 1024; // 64KB buffer
+        const size_t WINDOW_SIZE = 32 * 1024; // 32KB sliding window for regex processing
+        const size_t OVERLAP_SIZE = 16 * 1024; // 16KB overlap to catch patterns across boundaries
         
-        while (file.read(buffer, CHUNK_SIZE) || file.gcount() > 0) {
+        char buffer[BUFFER_SIZE];
+        std::string window;
+        window.reserve(WINDOW_SIZE + OVERLAP_SIZE);
+        int line_number = 1;
+        size_t file_position = 0;
+        
+        while (file.read(buffer, BUFFER_SIZE) || file.gcount() > 0) {
             std::streamsize bytes_read = file.gcount();
-            buffer[bytes_read] = '\0'; // Null terminate
             
-            std::string chunk = leftover + std::string(buffer, bytes_read);
-            leftover.clear();
-            
-            size_t start = 0;
-            size_t pos = 0;
-            
-            // Process complete lines within the chunk
-            while ((pos = chunk.find('\n', start)) != std::string::npos) {
-                std::string line = chunk.substr(start, pos - start);
+            // Add new data to window
+            for (std::streamsize i = 0; i < bytes_read; ++i) {
+                window += buffer[i];
                 
-                // Remove carriage return if present
-                if (!line.empty() && line.back() == '\r') {
-                    line.pop_back();
-                }
-                
-                // Process this complete line with all expressions
-                for (size_t expr_idx = 0; expr_idx < expressions.size(); ++expr_idx) {
-                    try {
-                        const auto& expr = expressions[expr_idx];
-                        
-                        if (expr.name.empty()) {
+                // When window gets full, process it and slide
+                if (window.size() >= WINDOW_SIZE + OVERLAP_SIZE) {
+                    // Process the first WINDOW_SIZE bytes
+                    std::string segment = window.substr(0, WINDOW_SIZE);
+                    
+                    // Count line numbers in this segment
+                    int segment_line_start = line_number;
+                    for (size_t j = 0; j < segment.size(); ++j) {
+                        if (segment[j] == '\n') {
+                            line_number++;
+                        }
+                    }
+                    
+                    // Process this segment with all expressions
+                    for (size_t expr_idx = 0; expr_idx < expressions.size(); ++expr_idx) {
+                        try {
+                            const auto& expr = expressions[expr_idx];
+                            
+                            if (expr.name.empty()) {
+                                continue;
+                            }
+                            
+                            std::sregex_iterator regex_start(segment.begin(), segment.end(), expr.pattern);
+                            std::sregex_iterator regex_end;
+                            
+                            for (std::sregex_iterator it = regex_start; it != regex_end; ++it) {
+                                std::smatch match = *it;
+                                
+                                // Calculate approximate line number for this match
+                                std::string before_match = segment.substr(0, match.position());
+                                int match_line = segment_line_start;
+                                for (char c : before_match) {
+                                    if (c == '\n') match_line++;
+                                }
+                                
+                                // Extract the line containing the match
+                                size_t line_start = match.position();
+                                while (line_start > 0 && segment[line_start - 1] != '\n') {
+                                    line_start--;
+                                }
+                                
+                                size_t line_end = match.position() + match.length();
+                                while (line_end < segment.size() && segment[line_end] != '\n') {
+                                    line_end++;
+                                }
+                                
+                                std::string match_line_content = segment.substr(line_start, line_end - line_start);
+                                
+                                Finding finding;
+                                finding.expression_name = expr.name;
+                                finding.filename = filepath;
+                                finding.line_number = match_line;
+                                finding.actual_match = match.str();
+                                finding.statement = match_line_content;
+                                
+                                local_findings.push_back(std::move(finding));
+                            }
+                            
+                        } catch (const std::regex_error& e) {
+                            // Continue processing other expressions
+                            continue;
+                        } catch (const std::exception& e) {
+                            // Continue processing other expressions
                             continue;
                         }
-                        
-                        std::sregex_iterator regex_start(line.begin(), line.end(), expr.pattern);
-                        std::sregex_iterator regex_end;
-                        
-                        for (std::sregex_iterator i = regex_start; i != regex_end; ++i) {
-                            std::smatch match = *i;
-                            
-                            Finding finding;
-                            finding.expression_name = expr.name;
-                            finding.filename = filepath;
-                            finding.line_number = line_number;
-                            finding.actual_match = match.str();
-                            finding.statement = line;
-                            
-                            local_findings.push_back(std::move(finding));
-                        }
-                        
-                    } catch (const std::regex_error& e) {
-                        std::cerr << "Regex error in expression " << expr_idx 
-                                 << " on line " << line_number 
-                                 << " in " << filepath << ": " << e.what() << std::endl;
-                        continue;
-                    } catch (const std::exception& e) {
-                        std::cerr << "Error processing expression " << expr_idx 
-                                 << " on line " << line_number 
-                                 << " in " << filepath << ": " << e.what() << std::endl;
-                        continue;
                     }
+                    
+                    // Slide the window - keep the overlap part
+                    window = window.substr(WINDOW_SIZE - OVERLAP_SIZE);
+                    file_position += WINDOW_SIZE - OVERLAP_SIZE;
                 }
-                
-                line_number++;
-                start = pos + 1;
-            }
-            
-            // Save any remaining partial line for next chunk
-            if (start < chunk.size()) {
-                leftover = chunk.substr(start);
             }
         }
         
-        // Process any remaining content in leftover (file didn't end with newline)
-        if (!leftover.empty()) {
+        // Process any remaining data in the window
+        if (!window.empty()) {
+            // Count remaining line numbers
+            for (char c : window) {
+                if (c == '\n') {
+                    line_number++;
+                }
+            }
+            
+            // Process remaining content with all expressions
             for (size_t expr_idx = 0; expr_idx < expressions.size(); ++expr_idx) {
                 try {
                     const auto& expr = expressions[expr_idx];
@@ -495,29 +522,45 @@ void RegexAnalyzer::processFile(const std::string& filepath) {
                         continue;
                     }
                     
-                    std::sregex_iterator regex_start(leftover.begin(), leftover.end(), expr.pattern);
+                    std::sregex_iterator regex_start(window.begin(), window.end(), expr.pattern);
                     std::sregex_iterator regex_end;
                     
-                    for (std::sregex_iterator i = regex_start; i != regex_end; ++i) {
-                        std::smatch match = *i;
+                    for (std::sregex_iterator it = regex_start; it != regex_end; ++it) {
+                        std::smatch match = *it;
+                        
+                        // Calculate line number for this match
+                        std::string before_match = window.substr(0, match.position());
+                        int match_line = line_number - std::count(window.begin(), window.end(), '\n');
+                        for (char c : before_match) {
+                            if (c == '\n') match_line++;
+                        }
+                        
+                        // Extract the line containing the match
+                        size_t line_start = match.position();
+                        while (line_start > 0 && window[line_start - 1] != '\n') {
+                            line_start--;
+                        }
+                        
+                        size_t line_end = match.position() + match.length();
+                        while (line_end < window.size() && window[line_end] != '\n') {
+                            line_end++;
+                        }
+                        
+                        std::string match_line_content = window.substr(line_start, line_end - line_start);
                         
                         Finding finding;
                         finding.expression_name = expr.name;
                         finding.filename = filepath;
-                        finding.line_number = line_number;
+                        finding.line_number = match_line;
                         finding.actual_match = match.str();
-                        finding.statement = leftover;
+                        finding.statement = match_line_content;
                         
                         local_findings.push_back(std::move(finding));
                     }
                     
                 } catch (const std::regex_error& e) {
-                    std::cerr << "Regex error in expression " << expr_idx 
-                             << " on final line in " << filepath << ": " << e.what() << std::endl;
                     continue;
                 } catch (const std::exception& e) {
-                    std::cerr << "Error processing expression " << expr_idx 
-                             << " on final line in " << filepath << ": " << e.what() << std::endl;
                     continue;
                 }
             }
