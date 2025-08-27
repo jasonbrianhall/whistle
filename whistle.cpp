@@ -413,76 +413,31 @@ void RegexAnalyzer::processFile(const std::string& filepath) {
         std::vector<Finding> local_findings;
         local_findings.reserve(100);
         
-        const size_t CHUNK_SIZE = 1024 * 1024; // 1MB chunks
-        char* buffer = new char[CHUNK_SIZE + 1]; // Dynamic allocation for larger buffer
+        const size_t CHUNK_SIZE = 256 * 1024; // 256KB chunks
+        char buffer[256 * 1024 + 1]; // Stack allocated
         std::string leftover;
         int line_number = 1;
         
-        try {
-            while (file.read(buffer, CHUNK_SIZE) || file.gcount() > 0) {
-                std::streamsize bytes_read = file.gcount();
-                buffer[bytes_read] = '\0';
-                
-                std::string chunk = leftover + std::string(buffer, bytes_read);
-                leftover.clear();
-                
-                size_t pos = 0;
-                size_t start = 0;
-                
-                // Find complete lines in this chunk
-                while ((pos = chunk.find('\n', start)) != std::string::npos) {
-                    std::string line = chunk.substr(start, pos - start);
-                    
-                    // Remove carriage return
-                    if (!line.empty() && line.back() == '\r') {
-                        line.pop_back();
-                    }
-                    
-                    // Process line with all expressions
-                    for (size_t expr_idx = 0; expr_idx < expressions.size(); ++expr_idx) {
-                        try {
-                            const auto& expr = expressions[expr_idx];
-                            
-                            if (expr.name.empty()) {
-                                continue;
-                            }
-                            
-                            std::sregex_iterator regex_start(line.begin(), line.end(), expr.pattern);
-                            std::sregex_iterator regex_end;
-                            
-                            for (std::sregex_iterator it = regex_start; it != regex_end; ++it) {
-                                Finding finding;
-                                finding.expression_name = expr.name;
-                                finding.filename = filepath;
-                                finding.line_number = line_number;
-                                finding.actual_match = it->str();
-                                finding.statement = line;
-                                
-                                local_findings.push_back(std::move(finding));
-                            }
-                            
-                        } catch (...) {
-                            // Skip problematic regex
-                            continue;
-                        }
-                    }
-                    
-                    line_number++;
-                    start = pos + 1;
-                }
-                
-                // Save incomplete line for next chunk
-                if (start < chunk.size()) {
-                    leftover = chunk.substr(start);
-                }
-            }
+        while (file.read(buffer, CHUNK_SIZE) || file.gcount() > 0) {
+            std::streamsize bytes_read = file.gcount();
+            buffer[bytes_read] = '\0';
             
-            // Process final leftover if exists
-            if (!leftover.empty()) {
-                if (!leftover.empty() && leftover.back() == '\r') {
-                    leftover.pop_back();
+            std::string chunk = leftover + std::string(buffer, bytes_read);
+            leftover.clear();
+            
+            size_t pos = 0;
+            size_t start = 0;
+            
+            // Find complete lines in this chunk
+            while ((pos = chunk.find('\n', start)) != std::string::npos) {
+                std::string line = chunk.substr(start, pos - start);
+                
+                // Remove carriage return
+                if (!line.empty() && line.back() == '\r') {
+                    line.pop_back();
                 }
                 
+                // Process line with all expressions
                 for (size_t expr_idx = 0; expr_idx < expressions.size(); ++expr_idx) {
                     try {
                         const auto& expr = expressions[expr_idx];
@@ -491,7 +446,7 @@ void RegexAnalyzer::processFile(const std::string& filepath) {
                             continue;
                         }
                         
-                        std::sregex_iterator regex_start(leftover.begin(), leftover.end(), expr.pattern);
+                        std::sregex_iterator regex_start(line.begin(), line.end(), expr.pattern);
                         std::sregex_iterator regex_end;
                         
                         for (std::sregex_iterator it = regex_start; it != regex_end; ++it) {
@@ -500,22 +455,60 @@ void RegexAnalyzer::processFile(const std::string& filepath) {
                             finding.filename = filepath;
                             finding.line_number = line_number;
                             finding.actual_match = it->str();
-                            finding.statement = leftover;
+                            finding.statement = line;
                             
                             local_findings.push_back(std::move(finding));
                         }
                         
                     } catch (...) {
+                        // Skip problematic regex
                         continue;
                     }
                 }
+                
+                line_number++;
+                start = pos + 1;
             }
-        } catch (...) {
-            delete[] buffer;
-            throw;
+            
+            // Save incomplete line for next chunk
+            if (start < chunk.size()) {
+                leftover = chunk.substr(start);
+            }
         }
         
-        delete[] buffer;
+        // Process final leftover if exists
+        if (!leftover.empty()) {
+            if (!leftover.empty() && leftover.back() == '\r') {
+                leftover.pop_back();
+            }
+            
+            for (size_t expr_idx = 0; expr_idx < expressions.size(); ++expr_idx) {
+                try {
+                    const auto& expr = expressions[expr_idx];
+                    
+                    if (expr.name.empty()) {
+                        continue;
+                    }
+                    
+                    std::sregex_iterator regex_start(leftover.begin(), leftover.end(), expr.pattern);
+                    std::sregex_iterator regex_end;
+                    
+                    for (std::sregex_iterator it = regex_start; it != regex_end; ++it) {
+                        Finding finding;
+                        finding.expression_name = expr.name;
+                        finding.filename = filepath;
+                        finding.line_number = line_number;
+                        finding.actual_match = it->str();
+                        finding.statement = leftover;
+                        
+                        local_findings.push_back(std::move(finding));
+                    }
+                    
+                } catch (...) {
+                    continue;
+                }
+            }
+        }
         
         // Add findings
         if (!local_findings.empty()) {
