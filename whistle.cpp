@@ -325,115 +325,160 @@ std::vector<ExpressionPattern> RegexAnalyzer::loadExpressions(const std::string&
 }
 
 bool RegexAnalyzer::isTextFile(const std::string& filepath) {
-    std::ifstream file(filepath, std::ios::binary);
-    if (!file.is_open()) {
-        return false;
-    }
-    
-    // Read first chunk of file to analyze
-    const size_t sample_size = 8192; // 8KB sample
-    char buffer[8192];
-    
-    file.read(buffer, sample_size);
-    std::streamsize bytes_read = file.gcount();
-    
-    if (bytes_read <= 0) {
-        return false; // Empty file or read error
-    }
-    
-    // Check for null bytes (common in binary files)
-    int null_count = 0;
-    int printable_count = 0;
-    int control_count = 0;
-    
-    // Only iterate over the actual bytes read with bounds check
-    for (std::streamsize i = 0; i < bytes_read; ++i) {
-        unsigned char byte = static_cast<unsigned char>(buffer[i]);
-        
-        if (byte == 0) {
-            null_count++;
-        } else if (std::isprint(byte) || byte == '\t' || byte == '\n' || byte == '\r') {
-            printable_count++;
-        } else if (byte < 32 || byte == 127) {
-            control_count++;
+    try {
+        std::ifstream file(filepath, std::ios::binary);
+        if (!file.is_open()) {
+            std::cerr << "Warning: Cannot open file for text check: " << filepath << std::endl;
+            return false;
         }
-    }
-    
-    // Heuristic: if more than 5% null bytes, likely binary
-    if (null_count > bytes_read * 0.05) {
+        
+        // Read first chunk of file to analyze
+        const size_t sample_size = 8192; // 8KB sample
+        char buffer[8192];
+        
+        // Initialize buffer to prevent reading garbage
+        std::memset(buffer, 0, sizeof(buffer));
+        
+        file.read(buffer, sample_size);
+        std::streamsize bytes_read = file.gcount();
+        
+        if (bytes_read <= 0) {
+            return true; // Empty file is technically text
+        }
+        
+        // Ensure we don't read beyond what was actually read
+        if (bytes_read > static_cast<std::streamsize>(sample_size)) {
+            bytes_read = static_cast<std::streamsize>(sample_size);
+        }
+        
+        // Check for null bytes (common in binary files)
+        int null_count = 0;
+        int printable_count = 0;
+        int control_count = 0;
+        
+        // Only iterate over the actual bytes read with bounds check
+        for (std::streamsize i = 0; i < bytes_read && i < static_cast<std::streamsize>(sample_size); ++i) {
+            unsigned char byte = static_cast<unsigned char>(buffer[i]);
+            
+            if (byte == 0) {
+                null_count++;
+            } else if (std::isprint(byte) || byte == '\t' || byte == '\n' || byte == '\r') {
+                printable_count++;
+            } else if (byte < 32 || byte == 127) {
+                control_count++;
+            }
+        }
+        
+        // Heuristic: if more than 5% null bytes, likely binary
+        if (bytes_read > 0 && null_count > bytes_read * 0.05) {
+            return false;
+        }
+        
+        // Heuristic: if less than 70% printable characters, likely binary
+        if (bytes_read > 0) {
+            double printable_ratio = static_cast<double>(printable_count) / bytes_read;
+            if (printable_ratio < 0.70) {
+                return false;
+            }
+        }
+        
+        // Additional check for UTF-8 BOM - ensure we have enough bytes
+        if (bytes_read >= 3 && 
+            static_cast<unsigned char>(buffer[0]) == 0xEF &&
+            static_cast<unsigned char>(buffer[1]) == 0xBB &&
+            static_cast<unsigned char>(buffer[2]) == 0xBF) {
+            return true; // UTF-8 BOM indicates text file
+        }
+        
+        return true; // Passed all heuristics
+        
+    } catch (const std::exception& e) {
+        std::cerr << "Error checking if file is text: " << filepath << " - " << e.what() << std::endl;
+        return false;
+    } catch (...) {
+        std::cerr << "Unknown error checking if file is text: " << filepath << std::endl;
         return false;
     }
-    
-    // Heuristic: if less than 70% printable characters, likely binary
-    double printable_ratio = static_cast<double>(printable_count) / bytes_read;
-    if (printable_ratio < 0.70) {
-        return false;
-    }
-    
-    // Additional check for UTF-8 BOM - ensure we have enough bytes
-    if (bytes_read >= 3 && 
-        static_cast<unsigned char>(buffer[0]) == 0xEF &&
-        static_cast<unsigned char>(buffer[1]) == 0xBB &&
-        static_cast<unsigned char>(buffer[2]) == 0xBF) {
-        return true; // UTF-8 BOM indicates text file
-    }
-    
-    return true; // Passed all heuristics
 }
 
 void RegexAnalyzer::processFile(const std::string& filepath) {
-    std::ifstream file(filepath);
-    if (!file.is_open()) {
-        return;
-    }
-    
-    std::string line;
-    line.reserve(1024); // Pre-allocate reasonable size
-    int line_number = 0;
-    std::vector<Finding> local_findings;
-    local_findings.reserve(100); // Pre-allocate to reduce reallocations
-    
-    // Limit line length to prevent excessive memory usage
-    const size_t MAX_LINE_LENGTH = 100000; // 100KB max per line
-    
-    while (std::getline(file, line)) {
-        line_number++;
-        
-        // Skip extremely long lines that might cause issues
-        if (line.length() > MAX_LINE_LENGTH) {
-            std::cerr << "Warning: Skipping very long line " << line_number 
-                     << " in file " << filepath << " (length: " << line.length() << ")" << std::endl;
-            continue;
+    try {
+        std::ifstream file(filepath);
+        if (!file.is_open()) {
+            std::cerr << "Warning: Could not open file: " << filepath << std::endl;
+            progress.increment();
+            return;
         }
         
-        // Process each expression safely
-        for (size_t expr_idx = 0; expr_idx < expressions.size(); ++expr_idx) {
-            const auto& expr = expressions[expr_idx];
-            try {
-                std::smatch match;
-                if (std::regex_search(line, match, expr.pattern)) {
-                    Finding finding;
-                    finding.expression_name = expr.name;
-                    finding.filename = filepath;
-                    finding.line_number = line_number;
-                    finding.actual_match = match.str();  // The actual matched text
-                    finding.statement = line;            // The full line
-                    local_findings.push_back(std::move(finding));
+        std::string line;
+        line.reserve(1024);
+        int line_number = 0;
+        std::vector<Finding> local_findings;
+        local_findings.reserve(100);
+        
+        while (std::getline(file, line)) {
+            line_number++;
+            
+            // Safety check for expressions vector
+            if (expressions.empty()) {
+                std::cerr << "Warning: No expressions loaded" << std::endl;
+                break;
+            }
+            
+            // Process each expression with bounds checking
+            for (size_t expr_idx = 0; expr_idx < expressions.size(); ++expr_idx) {
+                try {
+                    const auto& expr = expressions[expr_idx];
+                    
+                    // Safety check for empty pattern name
+                    if (expr.name.empty()) {
+                        std::cerr << "Warning: Empty expression name at index " << expr_idx << std::endl;
+                        continue;
+                    }
+                    
+                    std::smatch match;
+                    if (std::regex_search(line, match, expr.pattern)) {
+                        Finding finding;
+                        finding.expression_name = expr.name;
+                        finding.filename = filepath;
+                        finding.line_number = line_number;
+                        
+                        // Safety check for match result
+                        if (!match.empty() && match[0].matched) {
+                            finding.actual_match = match.str();
+                        } else {
+                            finding.actual_match = "";
+                        }
+                        finding.statement = line;
+                        
+                        local_findings.push_back(std::move(finding));
+                    }
+                } catch (const std::regex_error& e) {
+                    std::cerr << "Regex error in expression " << expr_idx 
+                             << " on line " << line_number 
+                             << " in " << filepath << ": " << e.what() << std::endl;
+                    continue;
+                } catch (const std::exception& e) {
+                    std::cerr << "Error processing expression " << expr_idx 
+                             << " on line " << line_number 
+                             << " in " << filepath << ": " << e.what() << std::endl;
+                    continue;
                 }
-            } catch (const std::exception& e) {
-                std::cerr << "Error processing regex '" << expr.name 
-                         << "' on line " << line_number 
-                         << " in file " << filepath << ": " << e.what() << std::endl;
-                continue; // Skip this regex and continue with others
             }
         }
-    }
-    
-    if (!local_findings.empty()) {
-        std::lock_guard<std::mutex> lock(findings_mutex);
-        all_findings.insert(all_findings.end(), 
-                           std::make_move_iterator(local_findings.begin()),
-                           std::make_move_iterator(local_findings.end()));
+        
+        // Add findings
+        if (!local_findings.empty()) {
+            std::lock_guard<std::mutex> lock(findings_mutex);
+            all_findings.insert(all_findings.end(), 
+                               std::make_move_iterator(local_findings.begin()),
+                               std::make_move_iterator(local_findings.end()));
+        }
+        
+    } catch (const std::exception& e) {
+        std::cerr << "Fatal error processing file " << filepath << ": " << e.what() << std::endl;
+    } catch (...) {
+        std::cerr << "Unknown fatal error processing file " << filepath << std::endl;
     }
     
     progress.increment();
@@ -484,6 +529,13 @@ void RegexAnalyzer::workerThread() {
             }
             filepath = file_queue.back();
             file_queue.pop_back();
+        }
+        
+        // Debug output to track which file is being processed
+        static std::mutex debug_mutex;
+        {
+            std::lock_guard<std::mutex> lock(debug_mutex);
+            std::cout << "Processing: " << filepath << std::endl;
         }
         
         processFile(filepath);
