@@ -2,54 +2,60 @@
 
 // XMLSpreadsheetWriter implementation
 std::string XMLSpreadsheetWriter::escapeXML(const std::string& text) {
-    std::string escaped = text;
-    size_t pos = 0;
-    
-    // Replace & first
-    while ((pos = escaped.find('&', pos)) != std::string::npos) {
-        escaped.replace(pos, 1, "&amp;");
-        pos += 5;
+    if (text.empty()) {
+        return text;
     }
     
-    pos = 0;
-    while ((pos = escaped.find('<', pos)) != std::string::npos) {
-        escaped.replace(pos, 1, "&lt;");
-        pos += 4;
-    }
+    std::string escaped;
+    escaped.reserve(text.length() * 2); // Reserve extra space for escapes
     
-    pos = 0;
-    while ((pos = escaped.find('>', pos)) != std::string::npos) {
-        escaped.replace(pos, 1, "&gt;");
-        pos += 4;
-    }
-    
-    pos = 0;
-    while ((pos = escaped.find('"', pos)) != std::string::npos) {
-        escaped.replace(pos, 1, "&quot;");
-        pos += 6;
-    }
-    
-    pos = 0;
-    while ((pos = escaped.find('\'', pos)) != std::string::npos) {
-        escaped.replace(pos, 1, "&apos;");
-        pos += 6;
+    for (size_t i = 0; i < text.length(); ++i) {
+        char c = text[i];
+        switch (c) {
+            case '&':
+                escaped += "&amp;";
+                break;
+            case '<':
+                escaped += "&lt;";
+                break;
+            case '>':
+                escaped += "&gt;";
+                break;
+            case '"':
+                escaped += "&quot;";
+                break;
+            case '\'':
+                escaped += "&apos;";
+                break;
+            default:
+                escaped += c;
+                break;
+        }
     }
     
     return escaped;
 }
 
 std::string XMLSpreadsheetWriter::cleanSheetName(const std::string& name) {
+    if (name.empty()) {
+        return "Sheet1";
+    }
+    
     std::string clean = name;
-    // Replace invalid characters
-    for (char& c : clean) {
+    
+    // Replace invalid characters with bounds checking
+    for (size_t i = 0; i < clean.length(); ++i) {
+        char& c = clean[i];
         if (c == '\\' || c == '/' || c == '?' || c == '*' || c == '[' || c == ']' || c == ':') {
             c = '_';
         }
     }
+    
     // Limit to 31 characters (Excel limit)
     if (clean.length() > 31) {
         clean = clean.substr(0, 31);
     }
+    
     return clean;
 }
 
@@ -326,26 +332,22 @@ bool RegexAnalyzer::isTextFile(const std::string& filepath) {
     
     // Read first chunk of file to analyze
     const size_t sample_size = 8192; // 8KB sample
-    std::vector<char> buffer(sample_size);
+    char buffer[8192];
     
-    // Use gcount() to get actual bytes read, not assuming sample_size
-    file.read(buffer.data(), sample_size);
+    file.read(buffer, sample_size);
     std::streamsize bytes_read = file.gcount();
     
     if (bytes_read <= 0) {
         return false; // Empty file or read error
     }
     
-    // Resize buffer to actual size read to prevent out-of-bounds access
-    buffer.resize(static_cast<size_t>(bytes_read));
-    
     // Check for null bytes (common in binary files)
     int null_count = 0;
     int printable_count = 0;
     int control_count = 0;
     
-    // Only iterate over the actual bytes read
-    for (size_t i = 0; i < static_cast<size_t>(bytes_read); ++i) {
+    // Only iterate over the actual bytes read with bounds check
+    for (std::streamsize i = 0; i < bytes_read; ++i) {
         unsigned char byte = static_cast<unsigned char>(buffer[i]);
         
         if (byte == 0) {
@@ -404,7 +406,9 @@ void RegexAnalyzer::processFile(const std::string& filepath) {
             continue;
         }
         
-        for (const auto& expr : expressions) {
+        // Process each expression safely
+        for (size_t expr_idx = 0; expr_idx < expressions.size(); ++expr_idx) {
+            const auto& expr = expressions[expr_idx];
             try {
                 std::smatch match;
                 if (std::regex_search(line, match, expr.pattern)) {
