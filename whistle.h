@@ -15,6 +15,7 @@
 #include <map>
 #include <iomanip>
 #include <sstream>
+#include <cstring>
 
 // Check for libxlsxwriter availability
 #ifdef HAVE_XLSXWRITER
