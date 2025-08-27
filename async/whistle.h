@@ -16,8 +16,6 @@
 #include <iomanip>
 #include <sstream>
 #include <cstring>
-#include <condition_variable>
-#include <memory>
 
 // Check for libxlsxwriter availability
 #ifdef HAVE_XLSXWRITER
@@ -26,6 +24,37 @@
 #else
 #define USE_XLSX 0
 #endif
+
+// Debug Logger class for thread-safe logging
+class DebugLogger {
+private:
+    std::ofstream log_file;
+    std::mutex log_mutex;
+    bool enabled;
+    
+    std::string getCurrentTimestamp() const;
+    std::string getThreadId() const;
+    
+public:
+    DebugLogger(const std::string& filename = "debug.log");
+    ~DebugLogger();
+    
+    void setEnabled(bool enable);
+    void log(const std::string& message);
+    void logInfo(const std::string& message);
+    void logWarning(const std::string& message);
+    void logError(const std::string& message);
+    void logDebug(const std::string& message);
+    
+    // Thread-safe singleton access
+    static DebugLogger& getInstance();
+};
+
+// Convenience macros for logging
+#define DEBUG_LOG(msg) DebugLogger::getInstance().logDebug(msg)
+#define INFO_LOG(msg) DebugLogger::getInstance().logInfo(msg)
+#define WARN_LOG(msg) DebugLogger::getInstance().logWarning(msg)
+#define ERROR_LOG(msg) DebugLogger::getInstance().logError(msg)
 
 // XML Spreadsheet 2003 writer (fallback when XLSX not available)
 class XMLSpreadsheetWriter {
@@ -59,30 +88,6 @@ struct ExpressionPattern {
     std::regex pattern;
 };
 
-// Work item representing a file-expression pair
-struct WorkItem {
-    std::string filepath;
-    size_t expression_index;
-    
-    WorkItem(const std::string& path, size_t expr_idx) 
-        : filepath(path), expression_index(expr_idx) {}
-    
-    WorkItem() : filepath(""), expression_index(0) {}
-};
-
-class Logger {
-private:
-    std::ofstream logFile;
-    std::mutex logMutex;
-    
-public:
-    Logger(const std::string& filename);
-    ~Logger();
-    
-    void log(const std::string& message);
-    void error(const std::string& message);
-};
-
 class ProgressTracker {
 private:
     std::atomic<int> processed{0};
@@ -96,32 +101,20 @@ public:
     void printProgress() const;
 };
 
-class AsyncRegexAnalyzer {
+class RegexAnalyzer {
 private:
     std::vector<ExpressionPattern> expressions;
-    
-    // Thread-safe work queue
-    std::queue<WorkItem> work_queue;
+    std::vector<std::string> file_queue;
     std::mutex queue_mutex;
-    std::condition_variable queue_cv;
-    std::atomic<bool> shutdown{false};
-    
-    // Thread-safe findings storage
     std::mutex findings_mutex;
     std::vector<Finding> all_findings;
-    
     ProgressTracker progress;
-    std::unique_ptr<Logger> logger;
-    
-    // Thread-safe counters for debugging
-    std::atomic<int> active_workers{0};
-    std::atomic<int> completed_items{0};
     
     std::vector<ExpressionPattern> loadExpressions(const std::string& filename);
     bool isTextFile(const std::string& filepath);
-    void processWorkItem(const WorkItem& work_item);
+    void processFile(const std::string& filepath);
     std::vector<std::string> findTextFiles(const std::string& directory);
-    void workerThread(int thread_id);
+    void workerThread();
     
 #if USE_XLSX
     void writeXLSXResults(const std::string& output_filename);
