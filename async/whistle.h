@@ -17,7 +17,7 @@
 #include <sstream>
 #include <cstring>
 #include <condition_variable>
-#include <future>
+#include <memory>
 
 // Check for libxlsxwriter availability
 #ifdef HAVE_XLSXWRITER
@@ -66,6 +66,21 @@ struct WorkItem {
     
     WorkItem(const std::string& path, size_t expr_idx) 
         : filepath(path), expression_index(expr_idx) {}
+    
+    WorkItem() : filepath(""), expression_index(0) {}
+};
+
+class Logger {
+private:
+    std::ofstream logFile;
+    std::mutex logMutex;
+    
+public:
+    Logger(const std::string& filename);
+    ~Logger();
+    
+    void log(const std::string& message);
+    void error(const std::string& message);
 };
 
 class ProgressTracker {
@@ -96,29 +111,17 @@ private:
     std::vector<Finding> all_findings;
     
     ProgressTracker progress;
+    std::unique_ptr<Logger> logger;
     
-    // Async file processing
-    std::vector<std::future<std::vector<Finding>>> file_futures;
-    std::mutex futures_mutex;
+    // Thread-safe counters for debugging
+    std::atomic<int> active_workers{0};
+    std::atomic<int> completed_items{0};
     
     std::vector<ExpressionPattern> loadExpressions(const std::string& filename);
     bool isTextFile(const std::string& filepath);
-    
-    // Process a single file with a single expression
-    std::vector<Finding> processFileWithExpression(const std::string& filepath, 
-                                                   const ExpressionPattern& expression);
-    
-    // Async file processing that returns a future
-    std::future<std::vector<Finding>> processFileAsync(const std::string& filepath, 
-                                                       const ExpressionPattern& expression);
-    
+    void processWorkItem(const WorkItem& work_item);
     std::vector<std::string> findTextFiles(const std::string& directory);
-    
-    // Worker thread that processes work items from queue
-    void workerThread();
-    
-    // Collect completed futures periodically
-    void collectCompletedFutures();
+    void workerThread(int thread_id);
     
 #if USE_XLSX
     void writeXLSXResults(const std::string& output_filename);

@@ -1,6 +1,48 @@
 #include "whistle.h"
 
-// XMLSpreadsheetWriter implementation (unchanged)
+// Logger implementation
+Logger::Logger(const std::string& filename) : logFile(filename) {
+    if (!logFile.is_open()) {
+        std::cerr << "Warning: Could not open log file: " << filename << std::endl;
+    }
+}
+
+Logger::~Logger() {
+    if (logFile.is_open()) {
+        logFile.close();
+    }
+}
+
+void Logger::log(const std::string& message) {
+    std::lock_guard<std::mutex> lock(logMutex);
+    auto now = std::chrono::system_clock::now();
+    auto time_t = std::chrono::system_clock::to_time_t(now);
+    
+    if (logFile.is_open()) {
+        logFile << "[" << std::put_time(std::localtime(&time_t), "%Y-%m-%d %H:%M:%S") 
+                << "] " << message << std::endl;
+        logFile.flush();
+    }
+    
+    // Also output to console for immediate feedback
+    std::cout << "[LOG] " << message << std::endl;
+}
+
+void Logger::error(const std::string& message) {
+    std::lock_guard<std::mutex> lock(logMutex);
+    auto now = std::chrono::system_clock::now();
+    auto time_t = std::chrono::system_clock::to_time_t(now);
+    
+    if (logFile.is_open()) {
+        logFile << "[" << std::put_time(std::localtime(&time_t), "%Y-%m-%d %H:%M:%S") 
+                << "] ERROR: " << message << std::endl;
+        logFile.flush();
+    }
+    
+    std::cerr << "[ERROR] " << message << std::endl;
+}
+
+// XMLSpreadsheetWriter implementation
 std::string XMLSpreadsheetWriter::escapeXML(const std::string& text) {
     if (text.empty()) {
         return text;
@@ -72,13 +114,11 @@ bool XMLSpreadsheetWriter::writeFile() {
     file << " xmlns:ss=\"urn:schemas-microsoft-com:office:spreadsheet\"\n";
     file << " xmlns:html=\"http://www.w3.org/TR/REC-html40\">\n";
     
-    // Write document properties
     file << " <DocumentProperties xmlns=\"urn:schemas-microsoft-com:office:office\">\n";
     file << "  <Created>" << std::chrono::system_clock::now().time_since_epoch().count() << "</Created>\n";
     file << "  <Application>Regex Analyzer</Application>\n";
     file << " </DocumentProperties>\n";
     
-    // Write styles (header and cell styles)
     file << " <Styles>\n";
     file << "  <Style ss:ID=\"Header\">\n";
     file << "   <Font ss:Bold=\"1\"/>\n";
@@ -101,20 +141,18 @@ bool XMLSpreadsheetWriter::writeFile() {
     file << "  </Style>\n";
     file << " </Styles>\n";
     
-    // Write worksheets
     for (const auto& [sheet_name, rows] : worksheets) {
         file << " <Worksheet ss:Name=\"" << escapeXML(sheet_name) << "\">\n";
         file << "  <Table>\n";
         
-        // Set column widths
-        file << "   <Column ss:Width=\"120\"/>\n"; // Finding
-        file << "   <Column ss:Width=\"240\"/>\n"; // File
-        file << "   <Column ss:Width=\"60\"/>\n";  // Line
-        file << "   <Column ss:Width=\"120\"/>\n"; // Comments
-        file << "   <Column ss:Width=\"90\"/>\n";  // Ease
-        file << "   <Column ss:Width=\"90\"/>\n";  // Significance
-        file << "   <Column ss:Width=\"90\"/>\n";  // Risk
-        file << "   <Column ss:Width=\"360\"/>\n"; // Statement
+        file << "   <Column ss:Width=\"120\"/>\n";
+        file << "   <Column ss:Width=\"240\"/>\n";
+        file << "   <Column ss:Width=\"60\"/>\n";
+        file << "   <Column ss:Width=\"120\"/>\n";
+        file << "   <Column ss:Width=\"90\"/>\n";
+        file << "   <Column ss:Width=\"90\"/>\n";
+        file << "   <Column ss:Width=\"90\"/>\n";
+        file << "   <Column ss:Width=\"360\"/>\n";
         
         for (size_t i = 0; i < rows.size(); ++i) {
             const auto& row = rows[i];
@@ -125,7 +163,7 @@ bool XMLSpreadsheetWriter::writeFile() {
                 std::string cell_data = escapeXML(row[j]);
                 
                 bool is_number = false;
-                if (j == 2 && i > 0) { // Line number column
+                if (j == 2 && i > 0) {
                     try {
                         std::stoi(row[j]);
                         is_number = true;
@@ -147,7 +185,6 @@ bool XMLSpreadsheetWriter::writeFile() {
         
         file << "  </Table>\n";
         
-        // Add worksheet options (freeze header row)
         if (!rows.empty()) {
             file << "  <WorksheetOptions xmlns=\"urn:schemas-microsoft-com:office:excel\">\n";
             file << "   <FreezePanes/>\n";
@@ -169,7 +206,7 @@ bool XMLSpreadsheetWriter::isOpen() const {
     return file.is_open();
 }
 
-// ProgressTracker implementation (unchanged)
+// ProgressTracker implementation
 void ProgressTracker::setTotal(int t) {
     total = t;
     start_time = std::chrono::steady_clock::now();
@@ -219,44 +256,45 @@ void ProgressTracker::printProgress() const {
 
 // AsyncRegexAnalyzer implementation
 std::vector<ExpressionPattern> AsyncRegexAnalyzer::loadExpressions(const std::string& filename) {
+    logger->log("Loading expressions from: " + filename);
+    
     std::vector<ExpressionPattern> patterns;
     std::ifstream file(filename);
     
     if (!file.is_open()) {
+        logger->error("Could not open expressions.properties file: " + filename);
         throw std::runtime_error("Could not open expressions.properties file");
     }
     
     std::string line;
     bool in_expressions_section = false;
+    int line_number = 0;
     
     while (std::getline(file, line)) {
-        // Trim whitespace
+        line_number++;
+        
         line.erase(0, line.find_first_not_of(" \t\r\n"));
         line.erase(line.find_last_not_of(" \t\r\n") + 1);
         
-        // Skip empty lines and comments
         if (line.empty() || line[0] == '#') continue;
         
-        // Check for [expressions] section
         if (line == "[expressions]") {
             in_expressions_section = true;
+            logger->log("Found [expressions] section at line " + std::to_string(line_number));
             continue;
         }
         
-        // Check for other sections
         if (line[0] == '[' && line.back() == ']') {
             in_expressions_section = false;
             continue;
         }
         
         if (in_expressions_section) {
-            // Parse expression.name=pattern
             size_t eq_pos = line.find('=');
             if (eq_pos != std::string::npos) {
                 std::string key = line.substr(0, eq_pos);
                 std::string value = line.substr(eq_pos + 1);
                 
-                // Trim key and value
                 key.erase(0, key.find_first_not_of(" \t"));
                 key.erase(key.find_last_not_of(" \t") + 1);
                 value.erase(0, value.find_first_not_of(" \t"));
@@ -268,7 +306,6 @@ std::vector<ExpressionPattern> AsyncRegexAnalyzer::loadExpressions(const std::st
                         std::regex_constants::syntax_option_type flags = std::regex_constants::ECMAScript;
                         std::string pattern_str = value;
                         
-                        // Handle (?i) case-insensitive flag
                         if (pattern_str.substr(0, 4) == "(?i)") {
                             flags |= std::regex_constants::icase;
                             pattern_str = pattern_str.substr(4);
@@ -280,16 +317,16 @@ std::vector<ExpressionPattern> AsyncRegexAnalyzer::loadExpressions(const std::st
                         
                         std::regex pattern(pattern_str, flags);
                         patterns.push_back({expr_name, std::move(pattern)});
-                        std::cout << "Loaded expression: " << expr_name << " = " << value << std::endl;
+                        logger->log("Loaded expression: " + expr_name + " = " + value);
                     } catch (const std::regex_error& e) {
-                        std::cerr << "Invalid regex for " << expr_name << ": " << value 
-                                 << " Error: " << e.what() << std::endl;
+                        logger->error("Invalid regex for " + expr_name + ": " + value + " Error: " + e.what());
                     }
                 }
             }
         }
     }
     
+    logger->log("Total expressions loaded: " + std::to_string(patterns.size()));
     return patterns;
 }
 
@@ -297,15 +334,15 @@ bool AsyncRegexAnalyzer::isTextFile(const std::string& filepath) {
     try {
         std::ifstream file(filepath, std::ios::binary);
         if (!file.is_open()) {
-            std::cerr << "Warning: Cannot open file for text check: " << filepath << std::endl;
+            logger->error("Cannot open file for text check: " + filepath);
             return false;
         }
         
         const size_t sample_size = 8192;
-        char buffer[8192];
-        memset(buffer, 0, sizeof(buffer));
+        std::unique_ptr<char[]> buffer(new char[sample_size]);
+        std::memset(buffer.get(), 0, sample_size);
         
-        file.read(buffer, sample_size);
+        file.read(buffer.get(), sample_size);
         std::streamsize bytes_read = file.gcount();
         
         if (bytes_read <= 0) return true;
@@ -317,7 +354,7 @@ bool AsyncRegexAnalyzer::isTextFile(const std::string& filepath) {
         int null_count = 0;
         int printable_count = 0;
         
-        for (std::streamsize i = 0; i < bytes_read && i < static_cast<std::streamsize>(sample_size); ++i) {
+        for (std::streamsize i = 0; i < bytes_read; ++i) {
             unsigned char byte = static_cast<unsigned char>(buffer[i]);
             
             if (byte == 0) {
@@ -338,45 +375,43 @@ bool AsyncRegexAnalyzer::isTextFile(const std::string& filepath) {
             }
         }
         
-        // Check for UTF-8 BOM
-        if (bytes_read >= 3 && 
-            static_cast<unsigned char>(buffer[0]) == 0xEF &&
-            static_cast<unsigned char>(buffer[1]) == 0xBB &&
-            static_cast<unsigned char>(buffer[2]) == 0xBF) {
-            return true;
-        }
-        
         return true;
         
     } catch (const std::exception& e) {
-        std::cerr << "Error checking if file is text: " << filepath << " - " << e.what() << std::endl;
-        return false;
-    } catch (...) {
-        std::cerr << "Unknown error checking if file is text: " << filepath << std::endl;
+        logger->error("Error checking if file is text: " + filepath + " - " + e.what());
         return false;
     }
 }
 
-std::vector<Finding> AsyncRegexAnalyzer::processFileWithExpression(const std::string& filepath, 
-                                                                   const ExpressionPattern& expression) {
+void AsyncRegexAnalyzer::processWorkItem(const WorkItem& work_item) {
+    if (work_item.expression_index >= expressions.size()) {
+        logger->error("Invalid expression index: " + std::to_string(work_item.expression_index) + 
+                     " for file: " + work_item.filepath);
+        return;
+    }
+    
+    const auto& expression = expressions[work_item.expression_index];
+    logger->log("Processing: " + work_item.filepath + " with expression: " + expression.name);
+    
     std::vector<Finding> findings;
     
     try {
-        std::ifstream file(filepath);
+        std::ifstream file(work_item.filepath);
         if (!file.is_open()) {
-            return findings; // Return empty findings
+            logger->error("Could not open file: " + work_item.filepath);
+            return;
         }
         
         const size_t BUFFER_SIZE = 64 * 1024;
         const size_t WINDOW_SIZE = 32 * 1024;
         const size_t OVERLAP_SIZE = 16 * 1024;
         
-        char buffer[BUFFER_SIZE];
+        std::unique_ptr<char[]> buffer(new char[BUFFER_SIZE]);
         std::string window;
         window.reserve(WINDOW_SIZE + OVERLAP_SIZE);
         int line_number = 1;
         
-        while (file.read(buffer, BUFFER_SIZE) || file.gcount() > 0) {
+        while (file.read(buffer.get(), BUFFER_SIZE) || file.gcount() > 0) {
             std::streamsize bytes_read = file.gcount();
             
             for (std::streamsize i = 0; i < bytes_read; ++i) {
@@ -392,7 +427,6 @@ std::vector<Finding> AsyncRegexAnalyzer::processFileWithExpression(const std::st
                         }
                     }
                     
-                    // Process this segment with the expression
                     try {
                         std::sregex_iterator regex_start(segment.begin(), segment.end(), expression.pattern);
                         std::sregex_iterator regex_end;
@@ -400,14 +434,12 @@ std::vector<Finding> AsyncRegexAnalyzer::processFileWithExpression(const std::st
                         for (std::sregex_iterator it = regex_start; it != regex_end; ++it) {
                             std::smatch match = *it;
                             
-                            // Calculate line number
                             std::string before_match = segment.substr(0, match.position());
                             int match_line = segment_line_start;
                             for (char c : before_match) {
                                 if (c == '\n') match_line++;
                             }
                             
-                            // Extract line containing match
                             size_t line_start = match.position();
                             while (line_start > 0 && segment[line_start - 1] != '\n') {
                                 line_start--;
@@ -422,7 +454,7 @@ std::vector<Finding> AsyncRegexAnalyzer::processFileWithExpression(const std::st
                             
                             Finding finding;
                             finding.expression_name = expression.name;
-                            finding.filename = filepath;
+                            finding.filename = work_item.filepath;
                             finding.line_number = match_line;
                             finding.actual_match = match.str();
                             finding.statement = match_line_content;
@@ -430,7 +462,8 @@ std::vector<Finding> AsyncRegexAnalyzer::processFileWithExpression(const std::st
                             findings.push_back(std::move(finding));
                         }
                     } catch (const std::regex_error& e) {
-                        // Continue processing
+                        logger->error("Regex error in file " + work_item.filepath + 
+                                     " with expression " + expression.name + ": " + e.what());
                     }
                     
                     window = window.substr(WINDOW_SIZE - OVERLAP_SIZE);
@@ -473,7 +506,7 @@ std::vector<Finding> AsyncRegexAnalyzer::processFileWithExpression(const std::st
                     
                     Finding finding;
                     finding.expression_name = expression.name;
-                    finding.filename = filepath;
+                    finding.filename = work_item.filepath;
                     finding.line_number = match_line;
                     finding.actual_match = match.str();
                     finding.statement = match_line_content;
@@ -481,38 +514,44 @@ std::vector<Finding> AsyncRegexAnalyzer::processFileWithExpression(const std::st
                     findings.push_back(std::move(finding));
                 }
             } catch (const std::regex_error& e) {
-                // Continue
+                logger->error("Regex error in remaining window for file " + work_item.filepath + 
+                             " with expression " + expression.name + ": " + e.what());
             }
         }
         
+        if (!findings.empty()) {
+            std::lock_guard<std::mutex> lock(findings_mutex);
+            all_findings.reserve(all_findings.size() + findings.size());
+            all_findings.insert(all_findings.end(), 
+                               std::make_move_iterator(findings.begin()),
+                               std::make_move_iterator(findings.end()));
+        }
+        
+        logger->log("Completed: " + work_item.filepath + " with expression: " + expression.name + 
+                   " - Found " + std::to_string(findings.size()) + " matches");
+        
     } catch (const std::exception& e) {
-        std::cerr << "Error processing file " << filepath << " with expression " 
-                  << expression.name << ": " << e.what() << std::endl;
+        logger->error("Fatal error processing work item " + work_item.filepath + 
+                     " with expression " + expression.name + ": " + e.what());
     }
     
-    return findings;
-}
-
-std::future<std::vector<Finding>> AsyncRegexAnalyzer::processFileAsync(const std::string& filepath, 
-                                                                       const ExpressionPattern& expression) {
-    return std::async(std::launch::async, [this, filepath, expression]() {
-        auto findings = processFileWithExpression(filepath, expression);
-        progress.increment(); // Increment after each file-expression pair completes
-        return findings;
-    });
+    progress.increment();
+    completed_items++;
 }
 
 std::vector<std::string> AsyncRegexAnalyzer::findTextFiles(const std::string& directory) {
+    logger->log("Scanning directory for text files: " + directory);
+    
     std::vector<std::string> text_files;
     
     try {
         if (!std::filesystem::exists(directory)) {
-            std::cerr << "Error: Directory does not exist: " << directory << std::endl;
+            logger->error("Directory does not exist: " + directory);
             return text_files;
         }
         
         if (!std::filesystem::is_directory(directory)) {
-            std::cerr << "Error: Path is not a directory: " << directory << std::endl;
+            logger->error("Path is not a directory: " + directory);
             return text_files;
         }
         
@@ -521,170 +560,205 @@ std::vector<std::string> AsyncRegexAnalyzer::findTextFiles(const std::string& di
                 if (entry.is_regular_file()) {
                     if (isTextFile(entry.path().string())) {
                         text_files.push_back(entry.path().string());
+                        if (text_files.size() % 1000 == 0) {
+                            logger->log("Found " + std::to_string(text_files.size()) + " text files so far...");
+                        }
                     }
                 }
             } catch (const std::filesystem::filesystem_error& e) {
-                std::cerr << "Error accessing file: " << entry.path() 
-                         << " - " << e.what() << std::endl;
+                logger->error("Error accessing file: " + entry.path().string() + " - " + e.what());
                 continue;
             }
         }
     } catch (const std::filesystem::filesystem_error& e) {
-        std::cerr << "Error accessing directory: " << e.what() << std::endl;
+        logger->error("Error accessing directory: " + std::string(e.what()));
     }
     
+    logger->log("Total text files found: " + std::to_string(text_files.size()));
     return text_files;
 }
 
-void AsyncRegexAnalyzer::collectCompletedFutures() {
-    std::lock_guard<std::mutex> lock(futures_mutex);
+void AsyncRegexAnalyzer::workerThread(int thread_id) {
+    logger->log("Worker thread " + std::to_string(thread_id) + " started");
+    active_workers++;
     
-    // Check for completed futures and collect their results
-    auto it = file_futures.begin();
-    while (it != file_futures.end()) {
-        if (it->wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
-            try {
-                auto findings = it->get();
-                if (!findings.empty()) {
-                    std::lock_guard<std::mutex> findings_lock(findings_mutex);
-                    all_findings.insert(all_findings.end(), 
-                                       std::make_move_iterator(findings.begin()),
-                                       std::make_move_iterator(findings.end()));
+    try {
+        while (!shutdown.load()) {
+            WorkItem work_item;
+            
+            {
+                std::unique_lock<std::mutex> lock(queue_mutex);
+                
+                if (!queue_cv.wait_for(lock, std::chrono::seconds(5), 
+                                      [this] { return !work_queue.empty() || shutdown.load(); })) {
+                    if (work_queue.empty() && !shutdown.load()) {
+                        logger->log("Worker thread " + std::to_string(thread_id) + " timeout waiting for work");
+                        continue;
+                    }
                 }
-            } catch (const std::exception& e) {
-                std::cerr << "Error collecting future result: " << e.what() << std::endl;
+                
+                if (shutdown.load() && work_queue.empty()) {
+                    logger->log("Worker thread " + std::to_string(thread_id) + " shutting down - no more work");
+                    break;
+                }
+                
+                if (!work_queue.empty()) {
+                    work_item = work_queue.front();
+                    work_queue.pop();
+                    
+                    logger->log("Worker thread " + std::to_string(thread_id) + " picked up work: " + 
+                               work_item.filepath + " expr[" + std::to_string(work_item.expression_index) + "]");
+                } else {
+                    continue;
+                }
             }
-            it = file_futures.erase(it);
-        } else {
-            ++it;
+            
+            if (!work_item.filepath.empty()) {
+                try {
+                    processWorkItem(work_item);
+                } catch (const std::exception& e) {
+                    logger->error("Worker thread " + std::to_string(thread_id) + 
+                                 " caught exception processing work item: " + e.what());
+                } catch (...) {
+                    logger->error("Worker thread " + std::to_string(thread_id) + 
+                                 " caught unknown exception processing work item");
+                }
+            }
         }
+    } catch (const std::exception& e) {
+        logger->error("Worker thread " + std::to_string(thread_id) + " fatal error: " + e.what());
+    } catch (...) {
+        logger->error("Worker thread " + std::to_string(thread_id) + " unknown fatal error");
     }
-}
-
-void AsyncRegexAnalyzer::workerThread() {
-    while (!shutdown.load()) {
-        WorkItem work_item("", 0);
-        
-        {
-            std::unique_lock<std::mutex> lock(queue_mutex);
-            queue_cv.wait(lock, [this] { return !work_queue.empty() || shutdown.load(); });
-            
-            if (shutdown.load() && work_queue.empty()) {
-                break;
-            }
-            
-            if (!work_queue.empty()) {
-                work_item = work_queue.front();
-                work_queue.pop();
-            } else {
-                continue;
-            }
-        }
-        
-        if (!work_item.filepath.empty() && work_item.expression_index < expressions.size()) {
-            // Launch async processing for this file-expression pair
-            auto future = processFileAsync(work_item.filepath, expressions[work_item.expression_index]);
-            
-            std::lock_guard<std::mutex> futures_lock(futures_mutex);
-            file_futures.push_back(std::move(future));
-        }
-        
-        // Periodically collect completed futures
-        collectCompletedFutures();
-    }
+    
+    active_workers--;
+    logger->log("Worker thread " + std::to_string(thread_id) + " finished");
 }
 
 void AsyncRegexAnalyzer::analyze(const std::string& directory, const std::string& expressions_file, 
                                 const std::string& output_file, int num_threads) {
     
-    std::cout << "Loading expressions from: " << expressions_file << std::endl;
-    expressions = loadExpressions(expressions_file);
+    logger = std::make_unique<Logger>("regex_analyzer.log");
+    logger->log("=== Starting Regex Analysis ===");
+    logger->log("Directory: " + directory);
+    logger->log("Expressions file: " + expressions_file);
+    logger->log("Output file: " + output_file);
+    logger->log("Threads: " + std::to_string(num_threads));
     
-    if (expressions.empty()) {
-        throw std::runtime_error("No valid expressions found in properties file");
-    }
-    
-    std::cout << "Loaded " << expressions.size() << " expressions" << std::endl;
-    std::cout << "Scanning directory: " << directory << std::endl;
-    
-    auto text_files = findTextFiles(directory);
-    std::cout << "Found " << text_files.size() << " text files" << std::endl;
-    
-    if (text_files.empty()) {
-        std::cout << "No text files found to process" << std::endl;
-        return;
-    }
-    
-    // Create work items for each file-expression combination
-    {
-        std::lock_guard<std::mutex> lock(queue_mutex);
-        for (const auto& filepath : text_files) {
-            for (size_t expr_idx = 0; expr_idx < expressions.size(); ++expr_idx) {
-                work_queue.emplace(filepath, expr_idx);
-            }
+    try {
+        expressions = loadExpressions(expressions_file);
+        
+        if (expressions.empty()) {
+            logger->error("No valid expressions found in properties file");
+            throw std::runtime_error("No valid expressions found in properties file");
         }
-    }
-    
-    int total_work_items = text_files.size() * expressions.size();
-    progress.setTotal(total_work_items);
-    std::cout << "Created " << total_work_items << " work items (" 
-              << text_files.size() << " files × " << expressions.size() << " expressions)" << std::endl;
-    std::cout << "Starting analysis with " << num_threads << " threads..." << std::endl;
-    
-    // Launch worker threads
-    std::vector<std::thread> threads;
-    for (int i = 0; i < num_threads; ++i) {
-        threads.emplace_back(&AsyncRegexAnalyzer::workerThread, this);
-    }
-    
-    // Monitor progress and collect results
-    auto start_time = std::chrono::steady_clock::now();
-    while (true) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
         
-        // Collect completed futures
-        collectCompletedFutures();
+        auto text_files = findTextFiles(directory);
         
-        // Check if all work is done
-        bool work_queue_empty = false;
+        if (text_files.empty()) {
+            logger->log("No text files found to process");
+            std::cout << "No text files found to process" << std::endl;
+            return;
+        }
+        
         {
             std::lock_guard<std::mutex> lock(queue_mutex);
-            work_queue_empty = work_queue.empty();
+            for (const auto& filepath : text_files) {
+                for (size_t expr_idx = 0; expr_idx < expressions.size(); ++expr_idx) {
+                    work_queue.emplace(filepath, expr_idx);
+                }
+            }
         }
         
-        bool futures_empty = false;
+        int total_work_items = text_files.size() * expressions.size();
+        progress.setTotal(total_work_items);
+        
+        logger->log("Created " + std::to_string(total_work_items) + " work items (" + 
+                   std::to_string(text_files.size()) + " files × " + 
+                   std::to_string(expressions.size()) + " expressions)");
+        
+        std::cout << "Found " << text_files.size() << " text files" << std::endl;
+        std::cout << "Loaded " << expressions.size() << " expressions" << std::endl;
+        std::cout << "Created " << total_work_items << " work items" << std::endl;
+        std::cout << "Starting analysis with " << num_threads << " threads..." << std::endl;
+        
+        std::vector<std::thread> threads;
+        for (int i = 0; i < num_threads; ++i) {
+            threads.emplace_back(&AsyncRegexAnalyzer::workerThread, this, i);
+        }
+        
+        auto start_time = std::chrono::steady_clock::now();
+        int last_completed = 0;
+        
+        while (true) {
+            std::this_thread::sleep_for(std::chrono::seconds(10));
+            
+            bool work_queue_empty = false;
+            int remaining_work = 0;
+            {
+                std::lock_guard<std::mutex> lock(queue_mutex);
+                work_queue_empty = work_queue.empty();
+                remaining_work = work_queue.size();
+            }
+            
+            int current_completed = completed_items.load();
+            int current_active = active_workers.load();
+            
+            logger->log("Status check - Completed: " + std::to_string(current_completed) + 
+                       "/" + std::to_string(total_work_items) + 
+                       ", Remaining: " + std::to_string(remaining_work) +
+                       ", Active workers: " + std::to_string(current_active));
+            
+            if (current_completed == last_completed && !work_queue_empty && current_active > 0) {
+                logger->log("Warning: No progress made in last 10 seconds. May be stuck.");
+            }
+            last_completed = current_completed;
+            
+            if (work_queue_empty && current_active == 0) {
+                logger->log("All work completed - breaking monitoring loop");
+                break;
+            }
+            
+            auto elapsed = std::chrono::duration_cast<std::chrono::minutes>(
+                std::chrono::steady_clock::now() - start_time).count();
+            if (elapsed > 120) {
+                logger->error("Processing timeout reached (2 hours) - forcing shutdown");
+                break;
+            }
+        }
+        
+        logger->log("Signaling shutdown to all worker threads");
+        shutdown.store(true);
+        queue_cv.notify_all();
+        
+        for (auto& thread : threads) {
+            if (thread.joinable()) {
+                thread.join();
+            }
+        }
+        
+        logger->log("All worker threads have finished");
+        
         {
-            std::lock_guard<std::mutex> lock(futures_mutex);
-            futures_empty = file_futures.empty();
+            std::lock_guard<std::mutex> lock(findings_mutex);
+            logger->log("Analysis complete. Found " + std::to_string(all_findings.size()) + " matches");
         }
         
-        if (work_queue_empty && futures_empty) {
-            break;
-        }
+        std::cout << std::endl << "Analysis complete. Found " << all_findings.size() << " matches" << std::endl;
+        std::cout << "Writing results to: " << output_file << std::endl;
         
-        // Timeout check (prevent infinite wait)
-        auto elapsed = std::chrono::duration_cast<std::chrono::minutes>(
-            std::chrono::steady_clock::now() - start_time).count();
-        if (elapsed > 60) { // 60 minute timeout
-            std::cout << "\nWarning: Processing taking longer than expected. Checking for stuck threads..." << std::endl;
-        }
+        writeResults(output_file);
+        logger->log("Results written successfully");
+        
+    } catch (const std::exception& e) {
+        logger->error("Fatal error in analyze(): " + std::string(e.what()));
+        throw;
+    } catch (...) {
+        logger->error("Unknown fatal error in analyze()");
+        throw;
     }
     
-    // Signal shutdown and wait for threads
-    shutdown.store(true);
-    queue_cv.notify_all();
-    
-    for (auto& thread : threads) {
-        thread.join();
-    }
-    
-    // Final collection of any remaining futures
-    collectCompletedFutures();
-    
-    std::cout << std::endl << "Analysis complete. Found " << all_findings.size() << " matches" << std::endl;
-    std::cout << "Writing results to: " << output_file << std::endl;
-    
-    writeResults(output_file);
+    logger->log("=== Regex Analysis Complete ===");
 }
 
 void AsyncRegexAnalyzer::writeResults(const std::string& output_filename) {
@@ -697,13 +771,14 @@ void AsyncRegexAnalyzer::writeResults(const std::string& output_filename) {
 
 #if USE_XLSX
 void AsyncRegexAnalyzer::writeXLSXResults(const std::string& output_filename) {
-    // Create workbook
+    logger->log("Writing XLSX results to: " + output_filename);
+    
     lxw_workbook* workbook = workbook_new(output_filename.c_str());
     if (!workbook) {
+        logger->error("Failed to create Excel workbook: " + output_filename);
         throw std::runtime_error("Failed to create Excel workbook: " + output_filename);
     }
     
-    // Create formats
     lxw_format* header_format = workbook_add_format(workbook);
     format_set_bold(header_format);
     format_set_bg_color(header_format, LXW_COLOR_GRAY);
@@ -713,14 +788,17 @@ void AsyncRegexAnalyzer::writeXLSXResults(const std::string& output_filename) {
     format_set_border(cell_format, LXW_BORDER_THIN);
     format_set_text_wrap(cell_format);
     
-    // Group findings by expression
     std::map<std::string, std::vector<Finding>> grouped_findings;
     
-    for (const auto& finding : all_findings) {
-        grouped_findings[finding.expression_name].push_back(finding);
+    {
+        std::lock_guard<std::mutex> lock(findings_mutex);
+        for (const auto& finding : all_findings) {
+            grouped_findings[finding.expression_name].push_back(finding);
+        }
     }
     
-    // Create worksheet for each expression
+    logger->log("Grouped findings into " + std::to_string(grouped_findings.size()) + " expressions");
+    
     for (const auto& [expr_name, findings] : grouped_findings) {
         std::string sheet_name = expr_name;
         for (char& c : sheet_name) {
@@ -734,21 +812,19 @@ void AsyncRegexAnalyzer::writeXLSXResults(const std::string& output_filename) {
         
         lxw_worksheet* worksheet = workbook_add_worksheet(workbook, sheet_name.c_str());
         if (!worksheet) {
-            std::cerr << "Failed to create worksheet: " << sheet_name << std::endl;
+            logger->error("Failed to create worksheet: " + sheet_name);
             continue;
         }
         
-        // Set column widths
-        worksheet_set_column(worksheet, 0, 0, 20, nullptr); // Finding
-        worksheet_set_column(worksheet, 1, 1, 40, nullptr); // File
-        worksheet_set_column(worksheet, 2, 2, 10, nullptr); // Line
-        worksheet_set_column(worksheet, 3, 3, 20, nullptr); // Comments
-        worksheet_set_column(worksheet, 4, 4, 15, nullptr); // Ease
-        worksheet_set_column(worksheet, 5, 5, 15, nullptr); // Significance
-        worksheet_set_column(worksheet, 6, 6, 15, nullptr); // Risk
-        worksheet_set_column(worksheet, 7, 7, 60, nullptr); // Statement
+        worksheet_set_column(worksheet, 0, 0, 20, nullptr);
+        worksheet_set_column(worksheet, 1, 1, 40, nullptr);
+        worksheet_set_column(worksheet, 2, 2, 10, nullptr);
+        worksheet_set_column(worksheet, 3, 3, 20, nullptr);
+        worksheet_set_column(worksheet, 4, 4, 15, nullptr);
+        worksheet_set_column(worksheet, 5, 5, 15, nullptr);
+        worksheet_set_column(worksheet, 6, 6, 15, nullptr);
+        worksheet_set_column(worksheet, 7, 7, 60, nullptr);
         
-        // Write headers
         worksheet_write_string(worksheet, 0, 0, "Finding", header_format);
         worksheet_write_string(worksheet, 0, 1, "File", header_format);
         worksheet_write_string(worksheet, 0, 2, "Line", header_format);
@@ -758,29 +834,26 @@ void AsyncRegexAnalyzer::writeXLSXResults(const std::string& output_filename) {
         worksheet_write_string(worksheet, 0, 6, "Risk", header_format);
         worksheet_write_string(worksheet, 0, 7, "Statement", header_format);
         
-        // Write findings
         int row = 1;
         for (const auto& finding : findings) {
             worksheet_write_string(worksheet, row, 0, finding.actual_match.c_str(), cell_format);
             worksheet_write_string(worksheet, row, 1, finding.filename.c_str(), cell_format);
             worksheet_write_number(worksheet, row, 2, finding.line_number, cell_format);
-            worksheet_write_string(worksheet, row, 3, "", cell_format); // Comments (blank)
-            worksheet_write_string(worksheet, row, 4, "", cell_format); // Ease (blank)
-            worksheet_write_string(worksheet, row, 5, "", cell_format); // Significance (blank)
-            worksheet_write_string(worksheet, row, 6, "", cell_format); // Risk (blank)
+            worksheet_write_string(worksheet, row, 3, "", cell_format);
+            worksheet_write_string(worksheet, row, 4, "", cell_format);
+            worksheet_write_string(worksheet, row, 5, "", cell_format);
+            worksheet_write_string(worksheet, row, 6, "", cell_format);
             worksheet_write_string(worksheet, row, 7, finding.statement.c_str(), cell_format);
             row++;
         }
         
         worksheet_freeze_panes(worksheet, 1, 0);
-        std::cout << "Created sheet: " << sheet_name << " with " << findings.size() << " findings" << std::endl;
+        logger->log("Created sheet: " + sheet_name + " with " + std::to_string(findings.size()) + " findings");
     }
     
-    // Create summary worksheet
     if (!all_findings.empty()) {
         lxw_worksheet* summary_worksheet = workbook_add_worksheet(workbook, "Summary");
         if (summary_worksheet) {
-            // Set column widths
             worksheet_set_column(summary_worksheet, 0, 0, 20, nullptr);
             worksheet_set_column(summary_worksheet, 1, 1, 40, nullptr);
             worksheet_set_column(summary_worksheet, 2, 2, 10, nullptr);
@@ -790,7 +863,6 @@ void AsyncRegexAnalyzer::writeXLSXResults(const std::string& output_filename) {
             worksheet_set_column(summary_worksheet, 6, 6, 15, nullptr);
             worksheet_set_column(summary_worksheet, 7, 7, 60, nullptr);
             
-            // Write headers
             worksheet_write_string(summary_worksheet, 0, 0, "Finding", header_format);
             worksheet_write_string(summary_worksheet, 0, 1, "File", header_format);
             worksheet_write_string(summary_worksheet, 0, 2, "Line", header_format);
@@ -800,30 +872,34 @@ void AsyncRegexAnalyzer::writeXLSXResults(const std::string& output_filename) {
             worksheet_write_string(summary_worksheet, 0, 6, "Risk", header_format);
             worksheet_write_string(summary_worksheet, 0, 7, "Statement", header_format);
             
-            // Write all findings
             int row = 1;
-            for (const auto& finding : all_findings) {
-                worksheet_write_string(summary_worksheet, row, 0, finding.actual_match.c_str(), cell_format);
-                worksheet_write_string(summary_worksheet, row, 1, finding.filename.c_str(), cell_format);
-                worksheet_write_number(summary_worksheet, row, 2, finding.line_number, cell_format);
-                worksheet_write_string(summary_worksheet, row, 3, "", cell_format);
-                worksheet_write_string(summary_worksheet, row, 4, "", cell_format);
-                worksheet_write_string(summary_worksheet, row, 5, "", cell_format);
-                worksheet_write_string(summary_worksheet, row, 6, "", cell_format);
-                worksheet_write_string(summary_worksheet, row, 7, finding.statement.c_str(), cell_format);
-                row++;
+            {
+                std::lock_guard<std::mutex> lock(findings_mutex);
+                for (const auto& finding : all_findings) {
+                    worksheet_write_string(summary_worksheet, row, 0, finding.actual_match.c_str(), cell_format);
+                    worksheet_write_string(summary_worksheet, row, 1, finding.filename.c_str(), cell_format);
+                    worksheet_write_number(summary_worksheet, row, 2, finding.line_number, cell_format);
+                    worksheet_write_string(summary_worksheet, row, 3, "", cell_format);
+                    worksheet_write_string(summary_worksheet, row, 4, "", cell_format);
+                    worksheet_write_string(summary_worksheet, row, 5, "", cell_format);
+                    worksheet_write_string(summary_worksheet, row, 6, "", cell_format);
+                    worksheet_write_string(summary_worksheet, row, 7, finding.statement.c_str(), cell_format);
+                    row++;
+                }
             }
             
             worksheet_freeze_panes(summary_worksheet, 1, 0);
-            std::cout << "Created Summary sheet with " << all_findings.size() << " total findings" << std::endl;
+            logger->log("Created Summary sheet with " + std::to_string(all_findings.size()) + " total findings");
         }
     }
     
     lxw_error error = workbook_close(workbook);
     if (error != LXW_NO_ERROR) {
+        logger->error("Failed to save Excel workbook: " + std::string(lxw_strerror(error)));
         throw std::runtime_error("Failed to save Excel workbook: " + std::string(lxw_strerror(error)));
     }
     
+    logger->log("Successfully created Excel file: " + output_filename);
     std::cout << "Successfully created Excel file: " << output_filename << std::endl;
 }
 #endif
@@ -840,47 +916,32 @@ void AsyncRegexAnalyzer::writeXMLSpreadsheetResults(const std::string& output_fi
         }
     }
     
+    logger->log("Writing XML Spreadsheet results to: " + xml_filename);
+    
     XMLSpreadsheetWriter writer(xml_filename);
     if (!writer.isOpen()) {
+        logger->error("Failed to create XML spreadsheet: " + xml_filename);
         throw std::runtime_error("Failed to create XML spreadsheet: " + xml_filename);
     }
     
-    // Group findings by expression
     std::map<std::string, std::vector<Finding>> grouped_findings;
     
-    for (const auto& finding : all_findings) {
-        grouped_findings[finding.expression_name].push_back(finding);
+    {
+        std::lock_guard<std::mutex> lock(findings_mutex);
+        for (const auto& finding : all_findings) {
+            grouped_findings[finding.expression_name].push_back(finding);
+        }
     }
     
-    // Create worksheet for each expression
+    logger->log("Grouped findings into " + std::to_string(grouped_findings.size()) + " expressions");
+    
     for (const auto& [expr_name, findings] : grouped_findings) {
         writer.addWorksheet(expr_name);
         
-        // Add header row
         writer.addRow(expr_name, {"Finding", "File", "Line", "Comments", "Ease", "Significance", "Risk", "Statement"});
         
-        // Add findings
         for (const auto& finding : findings) {
             writer.addRow(expr_name, {
-                finding.actual_match,
-                finding.filename,
-                std::to_string(finding.line_number),
-                "", "", "", "", // Comments, Ease, Significance, Risk (blank)
-                finding.statement
-            });
-        }
-        
-        std::cout << "Created sheet: " << expr_name << " with " << findings.size() << " findings" << std::endl;
-    }
-    
-    // Create summary worksheet
-    if (!all_findings.empty()) {
-        writer.addWorksheet("Summary");
-        
-        writer.addRow("Summary", {"Finding", "File", "Line", "Comments", "Ease", "Significance", "Risk", "Statement"});
-        
-        for (const auto& finding : all_findings) {
-            writer.addRow("Summary", {
                 finding.actual_match,
                 finding.filename,
                 std::to_string(finding.line_number),
@@ -889,14 +950,37 @@ void AsyncRegexAnalyzer::writeXMLSpreadsheetResults(const std::string& output_fi
             });
         }
         
-        std::cout << "Created Summary sheet with " << all_findings.size() << " total findings" << std::endl;
+        logger->log("Created sheet: " + expr_name + " with " + std::to_string(findings.size()) + " findings");
+    }
+    
+    if (!all_findings.empty()) {
+        writer.addWorksheet("Summary");
+        
+        writer.addRow("Summary", {"Finding", "File", "Line", "Comments", "Ease", "Significance", "Risk", "Statement"});
+        
+        {
+            std::lock_guard<std::mutex> lock(findings_mutex);
+            for (const auto& finding : all_findings) {
+                writer.addRow("Summary", {
+                    finding.actual_match,
+                    finding.filename,
+                    std::to_string(finding.line_number),
+                    "", "", "", "",
+                    finding.statement
+                });
+            }
+        }
+        
+        logger->log("Created Summary sheet with " + std::to_string(all_findings.size()) + " total findings");
     }
     
     if (!writer.writeFile()) {
+        logger->error("Failed to write XML spreadsheet file");
         throw std::runtime_error("Failed to write XML spreadsheet file");
     }
     
-    std::cout << "Successfully created XML Spreadsheet file: " << xml_filename << std::endl;
+    logger->log("Successfully created XML Spreadsheet file: " + xml_filename);
+    std::cout << "Successfully created XML Spreadsheet file: " + xml_filename << std::endl;
     std::cout << "This file can be opened in Excel, LibreOffice Calc, or Google Sheets" << std::endl;
 }
 
@@ -906,6 +990,8 @@ void printUsage(const char* program_name) {
     std::cout << "  expressions_file: Path to expressions.properties file" << std::endl;
     std::cout << "  output_file:      Base name for output files" << std::endl;
     std::cout << "  num_threads:      Number of worker threads (default: 4)" << std::endl;
+    std::cout << std::endl;
+    std::cout << "Note: A detailed log will be written to 'regex_analyzer.log'" << std::endl;
     std::cout << std::endl;
     std::cout << "Example expressions.properties format:" << std::endl;
     std::cout << "[expressions]" << std::endl;
@@ -930,15 +1016,19 @@ int main(int argc, char* argv[]) {
     std::cout << "Using XML Spreadsheet 2003 output format (XLSX library not available)" << std::endl;
 #endif
     
+    std::cout << "Detailed logging will be written to 'regex_analyzer.log'" << std::endl;
+    
     try {
         AsyncRegexAnalyzer analyzer;
         analyzer.analyze(directory, expressions_file, output_file, num_threads);
         
         std::cout << "Analysis completed successfully!" << std::endl;
+        std::cout << "Check 'regex_analyzer.log' for detailed execution information." << std::endl;
         return 0;
         
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << std::endl;
+        std::cerr << "Check 'regex_analyzer.log' for detailed error information." << std::endl;
         return 1;
     }
 }
