@@ -337,7 +337,7 @@ bool RegexAnalyzer::isTextFile(const std::string& filepath) {
         char buffer[8192];
         
         // Initialize buffer to prevent reading garbage
-        std::memset(buffer, 0, sizeof(buffer));
+        memset(buffer, 0, sizeof(buffer));
         
         file.read(buffer, sample_size);
         std::streamsize bytes_read = file.gcount();
@@ -411,7 +411,6 @@ void RegexAnalyzer::processFile(const std::string& filepath) {
         }
         
         std::string line;
-        line.reserve(1024);
         int line_number = 0;
         std::vector<Finding> local_findings;
         local_findings.reserve(100);
@@ -432,27 +431,26 @@ void RegexAnalyzer::processFile(const std::string& filepath) {
                     
                     // Safety check for empty pattern name
                     if (expr.name.empty()) {
-                        std::cerr << "Warning: Empty expression name at index " << expr_idx << std::endl;
                         continue;
                     }
                     
-                    std::smatch match;
-                    if (std::regex_search(line, match, expr.pattern)) {
+                    // Use iterator-based regex search for better memory handling on long lines
+                    std::sregex_iterator start(line.begin(), line.end(), expr.pattern);
+                    std::sregex_iterator end;
+                    
+                    for (std::sregex_iterator i = start; i != end; ++i) {
+                        std::smatch match = *i;
+                        
                         Finding finding;
                         finding.expression_name = expr.name;
                         finding.filename = filepath;
                         finding.line_number = line_number;
-                        
-                        // Safety check for match result
-                        if (!match.empty() && match[0].matched) {
-                            finding.actual_match = match.str();
-                        } else {
-                            finding.actual_match = "";
-                        }
+                        finding.actual_match = match.str();
                         finding.statement = line;
                         
                         local_findings.push_back(std::move(finding));
                     }
+                    
                 } catch (const std::regex_error& e) {
                     std::cerr << "Regex error in expression " << expr_idx 
                              << " on line " << line_number 
@@ -855,19 +853,3 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 }
-
-// Compilation instructions:
-// For systems with libxlsxwriter:
-//   g++ -std=c++17 -pthread -O2 -DHAVE_XLSXWRITER -o whistle whistle.cpp -lxlsxwriter
-//
-// For systems without libxlsxwriter (RHEL8, etc) - uses XML Spreadsheet 2003:
-//   g++ -std=c++17 -pthread -O2 -o whistle whistle.cpp
-//
-// Build from source libxlsxwriter on RHEL8:
-//   wget https://github.com/jmcnamara/libxlsxwriter/archive/RELEASE_1.1.5.tar.gz
-//   tar -xzf RELEASE_1.1.5.tar.gz
-//   cd libxlsxwriter-RELEASE_1.1.5
-//   make
-//   sudo make install
-//   sudo ldconfig
-//   g++ -std=c++17 -pthread -O2 -DHAVE_XLSXWRITER -o whistle whistle.cpp -lxlsxwriter
